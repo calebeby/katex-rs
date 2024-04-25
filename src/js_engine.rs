@@ -69,6 +69,16 @@ cfg_if! {
                 compile_error!("duktape backend is not support in the current build target.");
             }
         }
+    } else if #[cfg(feature = "v8")] {
+        cfg_if! {
+            if #[cfg(any(unix, windows))] {
+                mod v8;
+
+                pub(crate) type Engine = self::v8::Engine;
+            } else {
+                compile_error!("v8 backend is not support in the current build target.");
+            }
+        }
     } else if #[cfg(feature = "wasm-js")] {
         cfg_if! {
             if #[cfg(all(target_arch = "wasm32", target_os = "unknown"))] {

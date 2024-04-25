@@ -6,7 +6,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        features: ["quick-js", "duktape"]
+        features: ["quick-js", "duktape", "v8"]
     steps:
       - name: Set up Git repository
         uses: actions/checkout@v3
