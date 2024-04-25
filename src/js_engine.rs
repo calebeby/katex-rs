@@ -48,6 +48,10 @@ pub(crate) trait JsValue<'a>: Sized {
     fn into_string(self) -> Result<String>;
 }
 
+mod v8;
+
+pub(crate) type Engine = self::v8::Engine;
+
 cfg_if! {
     if #[cfg(feature = "quick-js")] {
         cfg_if! {
@@ -67,6 +71,16 @@ cfg_if! {
                 pub(crate) type Engine = self::duktape::Engine;
             } else {
                 compile_error!("duktape backend is not support in the current build target.");
+            }
+        }
+    } else if #[cfg(feature = "v8")] {
+        cfg_if! {
+            if #[cfg(any(unix, windows))] {
+                // mod v8;
+
+                // pub(crate) type Engine = self::v8::Engine;
+            } else {
+                compile_error!("v8 backend is not support in the current build target.");
             }
         }
     } else if #[cfg(feature = "wasm-js")] {

@@ -25,6 +25,8 @@ quick-js = { version = "0.4", features = ["patched"], optional = true }
 # duktape is available in unix and windows
 [target.'cfg(any(unix, windows))'.dependencies]
 ducc = { version = "0.1", optional = true }
+# v8 is available in unix and windows
+mini-v8 = { version = "0.4.1", optional = true }
 
 # wasm-js is available in wasm32-unknown-unknown
 [target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
@@ -34,8 +36,10 @@ js-sys = { version = "0.3", optional = true }
 wasm-bindgen-test = "0.3"
 
 [features]
-default = ["quick-js"]
+default = ["v8"]
+# default = ["quick-js"]
 quick-js = ["dep:quick-js"]
 duktape = ["dep:ducc"]
+v8 = ["dep:mini-v8"]
 wasm-js = ["dep:wasm-bindgen", "dep:js-sys"]
 wasm-js-test-in-browser = []
