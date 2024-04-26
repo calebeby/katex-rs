@@ -1,13 +1,11 @@
 use std::any::Any;
 use std::cell::RefCell;
 use std::collections::BTreeMap;
-use std::error::Error as StdError;
 use std::fmt;
 use std::iter::FromIterator;
 use std::ops::Deref;
 use std::rc::Rc;
 use std::result::Result as StdResult;
-use std::slice;
 use std::string::String as StdString;
 use std::sync::{Arc, Condvar, Mutex, Once};
 use std::thread;
@@ -333,8 +331,6 @@ pub(crate) enum Value {
     Number(f64),
     /// An immutable JavaScript string, managed by V8.
     String(String),
-    /// Reference to a JavaScript arrray.
-    Array(Array),
     /// Reference to a JavaScript function.
     Function(Function),
     /// Reference to a JavaScript object. If a value is a function or an array in JavaScript, it
@@ -371,7 +367,6 @@ impl Value {
             Value::Boolean(_) => "boolean",
             Value::Number(_) => "number",
             Value::Function(_) => "function",
-            Value::Array(_) => "array",
             Value::Object(_) => "object",
             Value::String(_) => "string",
         }
@@ -396,13 +391,6 @@ impl Value {
             let value: v8::Local<v8::String> = value.try_into().unwrap();
             let handle = v8::Global::new(scope, value);
             Value::String(String {
-                mv8: mv8.clone(),
-                handle,
-            })
-        } else if value.is_array() {
-            let value: v8::Local<v8::Array> = value.try_into().unwrap();
-            let handle = v8::Global::new(scope, value);
-            Value::Array(Array {
                 mv8: mv8.clone(),
                 handle,
             })
@@ -432,7 +420,6 @@ impl Value {
             Value::Boolean(v) => v8::Boolean::new(scope, *v).into(),
             Value::Number(v) => v8::Number::new(scope, *v).into(),
             Value::Function(v) => v8::Local::new(scope, v.handle.clone()).into(),
-            Value::Array(v) => v8::Local::new(scope, v.handle.clone()).into(),
             Value::Object(v) => v8::Local::new(scope, v.handle.clone()).into(),
             Value::String(v) => v8::Local::new(scope, v.handle.clone()).into(),
         }
@@ -447,7 +434,6 @@ impl fmt::Debug for Value {
             Value::Boolean(b) => write!(f, "{:?}", b),
             Value::Number(n) => write!(f, "{}", n),
             Value::String(s) => write!(f, "{:?}", s),
-            Value::Array(a) => write!(f, "{:?}", a),
             Value::Function(u) => write!(f, "{:?}", u),
             Value::Object(o) => write!(f, "{:?}", o),
         }
@@ -471,11 +457,6 @@ pub(crate) trait FromValue: Sized {
 pub(crate) struct Values(Vec<Value>);
 
 impl Values {
-    /// Creates an empty `Values`.
-    fn new() -> Values {
-        Values(Vec::new())
-    }
-
     fn from_vec(vec: Vec<Value>) -> Values {
         Values(vec)
     }
@@ -488,24 +469,6 @@ impl Values {
 impl FromIterator<Value> for Values {
     fn from_iter<I: IntoIterator<Item = Value>>(iter: I) -> Self {
         Values::from_vec(Vec::from_iter(iter))
-    }
-}
-
-impl IntoIterator for Values {
-    type Item = Value;
-    type IntoIter = vec::IntoIter<Value>;
-
-    fn into_iter(self) -> Self::IntoIter {
-        self.0.into_iter()
-    }
-}
-
-impl<'a> IntoIterator for &'a Values {
-    type Item = &'a Value;
-    type IntoIter = slice::Iter<'a, Value>;
-
-    fn into_iter(self) -> Self::IntoIter {
-        self.0.iter()
     }
 }
 
@@ -592,12 +555,6 @@ impl Error {
 
     fn from_js_conversion(from: &'static str, to: &'static str) -> Error {
         Error::FromJsConversionError { from, to }
-    }
-}
-
-impl StdError for Error {
-    fn description(&self) -> &'static str {
-        "JavaScript execution error"
     }
 }
 
@@ -697,12 +654,6 @@ impl ToValue for String {
     }
 }
 
-impl ToValue for Function {
-    fn to_value(self, _mv8: &MiniV8) -> Result<Value> {
-        Ok(Value::Function(self))
-    }
-}
-
 impl FromValue for Function {
     fn from_value(value: Value, _mv8: &MiniV8) -> Result<Function> {
         match value {
@@ -754,43 +705,6 @@ impl ToValues for Values {
     }
 }
 
-impl FromValues for Values {
-    fn from_values(values: Values, _mv8: &MiniV8) -> Result<Self> {
-        Ok(values)
-    }
-}
-
-impl<T: ToValue> ToValues for Variadic<T> {
-    fn to_values(self, mv8: &MiniV8) -> Result<Values> {
-        self.0
-            .into_iter()
-            .map(|value| value.to_value(mv8))
-            .collect()
-    }
-}
-
-impl<T: FromValue> FromValues for Variadic<T> {
-    fn from_values(values: Values, mv8: &MiniV8) -> Result<Self> {
-        values
-            .into_iter()
-            .map(|value| T::from_value(value, mv8))
-            .collect::<Result<Vec<T>>>()
-            .map(Variadic)
-    }
-}
-
-impl ToValues for () {
-    fn to_values(self, _mv8: &MiniV8) -> Result<Values> {
-        Ok(Values::new())
-    }
-}
-
-impl FromValues for () {
-    fn from_values(_values: Values, _mv8: &MiniV8) -> Result<Self> {
-        Ok(())
-    }
-}
-
 #[derive(Clone)]
 pub(crate) struct Object {
     mv8: MiniV8,
@@ -837,14 +751,10 @@ impl Object {
     /// collected (similar to `Object.getOwnPropertyNames` in Javascript). If `include_inherited` is
     /// `true`, then the object's own properties and the enumerable properties from its prototype
     /// chain will be collected.
-    fn keys(&self, include_inherited: bool) -> Result<Array> {
+    fn keys(&self) -> Result<Array> {
         self.mv8.try_catch(|scope| {
             let object = v8::Local::new(scope, self.handle.clone());
-            let keys = if include_inherited {
-                object.get_property_names(scope, Default::default())
-            } else {
-                object.get_own_property_names(scope, Default::default())
-            };
+            let keys = object.get_own_property_names(scope, Default::default());
             self.mv8.exception(scope)?;
             Ok(Array {
                 mv8: self.mv8.clone(),
@@ -856,7 +766,7 @@ impl Object {
 
 impl fmt::Debug for Object {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let keys = match self.keys(false) {
+        let keys = match self.keys() {
             Ok(keys) => keys,
             Err(_) => return write!(f, "<object with keys exception>"),
         };
