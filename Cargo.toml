@@ -26,7 +26,7 @@ quick-js = { version = "0.4", features = ["patched"], optional = true }
 [target.'cfg(any(unix, windows))'.dependencies]
 ducc = { version = "0.1", optional = true }
 # v8 is available in unix and windows
-mini-v8 = { version = "0.4.1", optional = true }
+mini-v8 = { path = "/home/caleb/Programming/calebeby/mini-v8", optional = true }
 
 # wasm-js is available in wasm32-unknown-unknown
 [target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]

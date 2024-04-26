@@ -33,14 +33,7 @@ impl JsEngine for Engine {
     }
 
     fn eval<'a>(&'a self, code: &str) -> Result<Self::JsValue<'a>> {
-        println!("\nYYY {}", code.len());
         let result = self.0.eval(code).map_err(|e| convert_error(e, &self.0))?;
-        println!("ZZZ {}", code.len());
-        // let result = self.0.eval(
-        //     r"
-        //     function katexRenderToString() {}
-        // ",
-        // )?;
         Ok(Value {
             value: result,
             engine: &self.0,
@@ -52,17 +45,13 @@ impl JsEngine for Engine {
         func_name: &str,
         args: impl Iterator<Item = Self::JsValue<'a>>,
     ) -> Result<Self::JsValue<'a>> {
-        println!("AAA {func_name}");
         let function = self
             .0
             .global()
             .get::<String, mini_v8::Function>(func_name.to_owned())
             .map_err(|e| convert_error(e, &self.0))?;
-        println!("BBB {func_name}");
         let args: mini_v8::Values = args.map(|v| v.value).collect();
-        println!("CCC {func_name}");
         let result = function.call(args).map_err(|e| convert_error(e, &self.0))?;
-        println!("DDD {func_name}");
         Ok(Value {
             value: result,
             engine: &self.0,
@@ -120,7 +109,7 @@ impl JsEngine for Engine {
     }
 }
 
-/// Duktape Value.
+/// v8 Value.
 pub struct Value<'a> {
     value: mini_v8::Value,
     engine: &'a mini_v8::MiniV8,

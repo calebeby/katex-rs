@@ -88,10 +88,6 @@ where
     let input = engine.create_string_value(input.to_owned())?;
     let opts = opts.as_ref().to_js_value(engine)?;
     let args = iter::once(input).chain(iter::once(opts));
-    let r = engine.eval("katexRenderToString('\\pi')")?;
-    println!("r: {}", r.into_string()?);
-    // let r = engine.eval("3+4")?;
-    // println!("r: {}", r.into_string()?);
     let result = engine.call_function("katexRenderToString", args)?;
     result.into_string()
 }
