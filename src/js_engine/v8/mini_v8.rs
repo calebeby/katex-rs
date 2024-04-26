@@ -1402,15 +1402,6 @@ impl<V: ToValue> ToValue for BTreeSet<V> {
     }
 }
 
-impl<V: FromValue + Ord> FromValue for BTreeSet<V> {
-    fn from_value(value: Value, _mv8: &MiniV8) -> Result<Self> {
-        match value {
-            Value::Array(a) => a.elements().collect(),
-            value => Err(Error::from_js_conversion(value.type_name(), "BTreeSet")),
-        }
-    }
-}
-
 impl<V: ToValue> ToValue for HashSet<V> {
     fn to_value(self, mv8: &MiniV8) -> Result<Value> {
         let array = mv8.create_array();
@@ -1421,15 +1412,6 @@ impl<V: ToValue> ToValue for HashSet<V> {
     }
 }
 
-impl<V: FromValue + Hash + Eq> FromValue for HashSet<V> {
-    fn from_value(value: Value, _mv8: &MiniV8) -> Result<Self> {
-        match value {
-            Value::Array(a) => a.elements().collect(),
-            value => Err(Error::from_js_conversion(value.type_name(), "HashSet")),
-        }
-    }
-}
-
 impl<V: ToValue> ToValue for Vec<V> {
     fn to_value(self, mv8: &MiniV8) -> Result<Value> {
         let array = mv8.create_array();
@@ -1437,15 +1419,6 @@ impl<V: ToValue> ToValue for Vec<V> {
             array.push(v)?;
         }
         Ok(Value::Array(array))
-    }
-}
-
-impl<V: FromValue> FromValue for Vec<V> {
-    fn from_value(value: Value, _mv8: &MiniV8) -> Result<Self> {
-        match value {
-            Value::Array(a) => a.elements().collect(),
-            value => Err(Error::from_js_conversion(value.type_name(), "Vec")),
-        }
     }
 }
 
@@ -1927,16 +1900,6 @@ impl Array {
     pub fn push<V: ToValue>(&self, value: V) -> Result<()> {
         self.set(self.len(), value)
     }
-
-    /// Returns an iterator over the array's indexable values.
-    pub fn elements<V: FromValue>(self) -> Elements<V> {
-        Elements {
-            array: self,
-            index: 0,
-            len: None,
-            _phantom: PhantomData,
-        }
-    }
 }
 
 impl fmt::Debug for Array {
@@ -1953,30 +1916,5 @@ impl fmt::Debug for Array {
             }
         }
         write!(f, "]")
-    }
-}
-
-pub struct Elements<V> {
-    array: Array,
-    index: u32,
-    len: Option<u32>,
-    _phantom: PhantomData<V>,
-}
-
-impl<V: FromValue> Iterator for Elements<V> {
-    type Item = Result<V>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.len.is_none() {
-            self.len = Some(self.array.len());
-        }
-
-        if self.index >= self.len.unwrap() {
-            return None;
-        }
-
-        let result = self.array.get(self.index);
-        self.index += 1;
-        Some(result)
     }
 }
