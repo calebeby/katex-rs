@@ -1,11 +1,9 @@
 use std::any::Any;
 use std::cell::RefCell;
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::BTreeMap;
 use std::error::Error as StdError;
 use std::fmt;
-use std::hash::{BuildHasher, Hash};
 use std::iter::FromIterator;
-use std::marker::PhantomData;
 use std::ops::Deref;
 use std::rc::Rc;
 use std::result::Result as StdResult;
@@ -102,17 +100,6 @@ impl MiniV8 {
             String {
                 mv8: self.clone(),
                 handle: v8::Global::new(scope, string),
-            }
-        })
-    }
-
-    /// Creates and returns an empty `Array` managed by V8.
-    fn create_array(&self) -> Array {
-        self.scope(|scope| {
-            let array = v8::Array::new(scope, 0);
-            Array {
-                mv8: self.clone(),
-                handle: v8::Global::new(scope, array),
             }
         })
     }
@@ -359,14 +346,6 @@ impl Value {
     /// A wrapper around `FromValue::from_value`.
     fn into<T: FromValue>(self, mv8: &MiniV8) -> Result<T> {
         T::from_value(self, mv8)
-    }
-
-    /// Coerces a value to a boolean. Returns `true` if the value is "truthy", `false` otherwise.
-    fn coerce_boolean(&self, mv8: &MiniV8) -> bool {
-        match self {
-            &Value::Boolean(b) => b,
-            value => mv8.scope(|scope| value.to_v8_value(scope).boolean_value(scope)),
-        }
     }
 
     /// Coerces a value to a string. Nearly all JavaScript values are coercible to strings, but this
@@ -712,60 +691,9 @@ impl FromValue for Value {
     }
 }
 
-impl ToValue for () {
-    fn to_value(self, _mv8: &MiniV8) -> Result<Value> {
-        Ok(Value::Undefined)
-    }
-}
-
-impl FromValue for () {
-    fn from_value(_value: Value, _mv8: &MiniV8) -> Result<Self> {
-        Ok(())
-    }
-}
-
-impl<T: ToValue> ToValue for Option<T> {
-    fn to_value(self, mv8: &MiniV8) -> Result<Value> {
-        match self {
-            Some(val) => val.to_value(mv8),
-            None => Ok(Value::Null),
-        }
-    }
-}
-
-impl<T: FromValue> FromValue for Option<T> {
-    fn from_value(value: Value, mv8: &MiniV8) -> Result<Self> {
-        match value {
-            Value::Null | Value::Undefined => Ok(None),
-            value => Ok(Some(T::from_value(value, mv8)?)),
-        }
-    }
-}
-
 impl ToValue for String {
     fn to_value(self, _mv8: &MiniV8) -> Result<Value> {
         Ok(Value::String(self))
-    }
-}
-
-impl FromValue for String {
-    fn from_value(value: Value, mv8: &MiniV8) -> Result<String> {
-        value.coerce_string(mv8)
-    }
-}
-
-impl ToValue for Array {
-    fn to_value(self, _mv8: &MiniV8) -> Result<Value> {
-        Ok(Value::Array(self))
-    }
-}
-
-impl FromValue for Array {
-    fn from_value(value: Value, _mv8: &MiniV8) -> Result<Array> {
-        match value {
-            Value::Array(a) => Ok(a),
-            value => Err(Error::from_js_conversion(value.type_name(), "Array")),
-        }
     }
 }
 
@@ -784,116 +712,9 @@ impl FromValue for Function {
     }
 }
 
-impl ToValue for Object {
-    fn to_value(self, _mv8: &MiniV8) -> Result<Value> {
-        Ok(Value::Object(self))
-    }
-}
-
-impl FromValue for Object {
-    fn from_value(value: Value, _mv8: &MiniV8) -> Result<Object> {
-        match value {
-            Value::Object(o) => Ok(o),
-            value => Err(Error::from_js_conversion(value.type_name(), "Object")),
-        }
-    }
-}
-
-impl<K, V, S> ToValue for HashMap<K, V, S>
-where
-    K: Eq + Hash + ToValue,
-    V: ToValue,
-    S: BuildHasher,
-{
-    fn to_value(self, mv8: &MiniV8) -> Result<Value> {
-        let object = mv8.create_object();
-        for (k, v) in self.into_iter() {
-            object.set(k, v)?;
-        }
-        Ok(Value::Object(object))
-    }
-}
-
-impl<K, V, S> FromValue for HashMap<K, V, S>
-where
-    K: Eq + Hash + FromValue,
-    V: FromValue,
-    S: BuildHasher + Default,
-{
-    fn from_value(value: Value, _mv8: &MiniV8) -> Result<Self> {
-        match value {
-            Value::Object(o) => o.properties(false)?.collect(),
-            value => Err(Error::from_js_conversion(value.type_name(), "HashMap")),
-        }
-    }
-}
-
-impl<K, V> ToValue for BTreeMap<K, V>
-where
-    K: Ord + ToValue,
-    V: ToValue,
-{
-    fn to_value(self, mv8: &MiniV8) -> Result<Value> {
-        let object = mv8.create_object();
-        for (k, v) in self.into_iter() {
-            object.set(k, v)?;
-        }
-        Ok(Value::Object(object))
-    }
-}
-
-impl<K, V> FromValue for BTreeMap<K, V>
-where
-    K: Ord + FromValue,
-    V: FromValue,
-{
-    fn from_value(value: Value, _mv8: &MiniV8) -> Result<Self> {
-        match value {
-            Value::Object(o) => o.properties(false)?.collect(),
-            value => Err(Error::from_js_conversion(value.type_name(), "BTreeMap")),
-        }
-    }
-}
-
-impl<V: ToValue> ToValue for BTreeSet<V> {
-    fn to_value(self, mv8: &MiniV8) -> Result<Value> {
-        let array = mv8.create_array();
-        for v in self.into_iter() {
-            array.push(v)?;
-        }
-        Ok(Value::Array(array))
-    }
-}
-
-impl<V: ToValue> ToValue for HashSet<V> {
-    fn to_value(self, mv8: &MiniV8) -> Result<Value> {
-        let array = mv8.create_array();
-        for v in self.into_iter() {
-            array.push(v)?;
-        }
-        Ok(Value::Array(array))
-    }
-}
-
-impl<V: ToValue> ToValue for Vec<V> {
-    fn to_value(self, mv8: &MiniV8) -> Result<Value> {
-        let array = mv8.create_array();
-        for v in self.into_iter() {
-            array.push(v)?;
-        }
-        Ok(Value::Array(array))
-    }
-}
-
 impl ToValue for bool {
     fn to_value(self, _mv8: &MiniV8) -> Result<Value> {
         Ok(Value::Boolean(self))
-    }
-}
-
-impl FromValue for bool {
-    fn from_value(value: Value, mv8: &MiniV8) -> Result<Self> {
-        Ok(value.coerce_boolean(mv8))
     }
 }
 
@@ -1031,24 +852,6 @@ impl Object {
             })
         })
     }
-
-    /// Converts the object into an iterator over the object's keys and values, acting like a
-    /// `for-in` loop.
-    ///
-    /// For information on the `include_inherited` argument, see `Object::keys`.
-    fn properties<K, V>(self, include_inherited: bool) -> Result<Properties<K, V>>
-    where
-        K: FromValue,
-        V: FromValue,
-    {
-        let keys = self.keys(include_inherited)?;
-        Ok(Properties {
-            object: self,
-            keys,
-            index: 0,
-            _phantom: PhantomData,
-        })
-    }
 }
 
 impl fmt::Debug for Object {
@@ -1085,50 +888,6 @@ impl fmt::Debug for Object {
     }
 }
 
-/// An iterator over an object's keys and values, acting like a `for-in` loop.
-struct Properties<K, V> {
-    object: Object,
-    keys: Array,
-    index: u32,
-    _phantom: PhantomData<(K, V)>,
-}
-
-impl<K, V> Iterator for Properties<K, V>
-where
-    K: FromValue,
-    V: FromValue,
-{
-    type Item = Result<(K, V)>;
-
-    /// This will return `Some(Err(...))` if the next property's key or value failed to be converted
-    /// into `K` or `V` respectively (through `ToValue`).
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.index >= self.keys.len() {
-            return None;
-        }
-
-        let key = self.keys.get::<Value>(self.index);
-        self.index += 1;
-
-        let key = match key {
-            Ok(v) => v,
-            Err(e) => return Some(Err(e)),
-        };
-
-        let value = match self.object.get::<_, V>(key.clone()) {
-            Ok(v) => v,
-            Err(e) => return Some(Err(e)),
-        };
-
-        let key = match key.into(&self.object.mv8) {
-            Ok(v) => v,
-            Err(e) => return Some(Err(e)),
-        };
-
-        Some(Ok((key, value)))
-    }
-}
-
 #[derive(Clone)]
 pub(crate) struct Array {
     mv8: MiniV8,
@@ -1151,29 +910,10 @@ impl Array {
             .and_then(|v| v.into(&self.mv8))
     }
 
-    /// Sets an array element using the given index and value.
-    ///
-    /// Returns an error if `ToValue::to_value` fails for the value.
-    fn set<V: ToValue>(&self, index: u32, value: V) -> Result<()> {
-        let value = value.to_value(&self.mv8)?;
-        self.mv8.try_catch(|scope| {
-            let array = v8::Local::new(scope, self.handle.clone());
-            let value = value.to_v8_value(scope);
-            array.set_index(scope, index, value);
-            self.mv8.exception(scope)
-        })
-    }
-
     /// Returns the number of elements in the array.
     fn len(&self) -> u32 {
         self.mv8
             .scope(|scope| v8::Local::new(scope, self.handle.clone()).length())
-    }
-
-    /// Pushes an element to the end of the array. This is a shortcut for `set` using `len` as the
-    /// index.
-    fn push<V: ToValue>(&self, value: V) -> Result<()> {
-        self.set(self.len(), value)
     }
 }
 
