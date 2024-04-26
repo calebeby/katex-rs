@@ -4,9 +4,7 @@ use std::iter::FromIterator;
 use std::rc::Rc;
 use std::result::Result as StdResult;
 use std::string::String as StdString;
-use std::sync::{Arc, Condvar, Mutex, Once};
-use std::thread;
-use std::time::Duration;
+use std::sync::Once;
 use std::vec;
 
 #[derive(Clone)]
@@ -36,47 +34,10 @@ impl MiniV8 {
     }
 
     /// Executes a JavaScript script and returns its result.
-    pub(crate) fn eval<S, R>(&self, script: S) -> Result<R>
-    where
-        S: Into<Script>,
-        R: FromValue,
-    {
-        let script = script.into();
-        let isolate_handle = self.interface.isolate_handle();
-        match (self.interface.len() == 1, script.timeout) {
-            (true, Some(timeout)) => execute_with_timeout(
-                timeout,
-                || self.eval_inner(script),
-                move || {
-                    isolate_handle.terminate_execution();
-                },
-            )?
-            .into(self),
-            (false, Some(_)) => Err(Error::InvalidTimeout),
-            (_, None) => self.eval_inner(script)?.into(self),
-        }
-    }
-
-    fn eval_inner(&self, script: Script) -> Result<Value> {
+    pub(crate) fn eval(&self, script: &str) -> Result<Value> {
         self.try_catch(|scope| {
-            let source = create_string(scope, &script.source);
-            let origin = script.origin.map(|o| {
-                let name = create_string(scope, &o.name).into();
-                let source_map_url = create_string(scope, "").into();
-                v8::ScriptOrigin::new(
-                    scope,
-                    name,
-                    o.line_offset,
-                    o.column_offset,
-                    false,
-                    0,
-                    source_map_url,
-                    true,
-                    false,
-                    false,
-                )
-            });
-            let script = v8::Script::compile(scope, source, origin.as_ref());
+            let source = create_string(scope, script);
+            let script = v8::Script::compile(scope, source, None);
             self.exception(scope)?;
             let result = script.unwrap().run(scope);
             self.exception(scope)?;
@@ -143,14 +104,6 @@ impl MiniV8 {
 struct Interface(Rc<RefCell<Vec<Rc<RefCell<InterfaceEntry>>>>>);
 
 impl Interface {
-    fn len(&self) -> usize {
-        self.0.borrow().len()
-    }
-
-    fn isolate_handle(&self) -> v8::IsolateHandle {
-        self.top(|entry| entry.isolate_handle())
-    }
-
     // Opens a new handle scope in the global context.
     fn scope<F, T>(&self, func: F) -> T
     where
@@ -202,12 +155,6 @@ impl InterfaceEntry {
             }
         }
     }
-
-    fn isolate_handle(&self) -> v8::IsolateHandle {
-        match self {
-            InterfaceEntry::Isolate(isolate) => isolate.thread_safe_handle(),
-        }
-    }
 }
 
 struct Global {
@@ -236,75 +183,6 @@ fn initialize_slots(isolate: &mut v8::Isolate) {
 
 fn create_string<'s>(scope: &mut v8::HandleScope<'s>, value: &str) -> v8::Local<'s, v8::String> {
     v8::String::new(scope, value).expect("string exceeds maximum length")
-}
-
-// A JavaScript script.
-#[derive(Clone, Debug, Default)]
-pub(crate) struct Script {
-    /// The source of the script.
-    source: StdString,
-    /// The maximum runtime duration of the script's execution. This cannot be set within a nested
-    /// evaluation, i.e. it cannot be set when calling `MiniV8::eval` from within a `Function`
-    /// created with `MiniV8::create_function` or `MiniV8::create_function_mut`.
-    ///
-    /// V8 can only cancel script evaluation while running actual JavaScript code. If Rust code is
-    /// being executed when the timeout is triggered, the execution will continue until the
-    /// evaluation has returned to running JavaScript code.
-    timeout: Option<Duration>,
-    /// The script's origin.
-    origin: Option<ScriptOrigin>,
-}
-
-/// The origin, within a file, of a JavaScript script.
-#[derive(Clone, Debug, Default)]
-struct ScriptOrigin {
-    /// The name of the file this script belongs to.
-    name: StdString,
-    /// The line at which this script starts.
-    line_offset: i32,
-    /// The column at which this script starts.
-    column_offset: i32,
-}
-
-impl From<StdString> for Script {
-    fn from(source: StdString) -> Script {
-        Script {
-            source,
-            ..Default::default()
-        }
-    }
-}
-
-impl<'a> From<&'a str> for Script {
-    fn from(source: &'a str) -> Script {
-        source.to_string().into()
-    }
-}
-
-fn execute_with_timeout<T>(
-    timeout: Duration,
-    execute_fn: impl FnOnce() -> T,
-    timed_out_fn: impl FnOnce() + Send + 'static,
-) -> T {
-    let wait = Arc::new((Mutex::new(true), Condvar::new()));
-    let timer_wait = wait.clone();
-    thread::spawn(move || {
-        let (mutex, condvar) = &*timer_wait;
-        let timer = condvar
-            .wait_timeout_while(mutex.lock().unwrap(), timeout, |&mut is_executing| {
-                is_executing
-            })
-            .unwrap();
-        if timer.1.timed_out() {
-            timed_out_fn();
-        }
-    });
-
-    let result = execute_fn();
-    let (mutex, condvar) = &*wait;
-    *mutex.lock().unwrap() = false;
-    condvar.notify_one();
-    result
 }
 
 /// A JavaScript value.
@@ -504,8 +382,6 @@ pub(crate) enum Error {
     },
     /// An evaluation timeout occurred.
     Timeout,
-    /// An evaluation timeout was specified from within a Rust function embedded in V8.
-    InvalidTimeout,
     /// An exception that occurred within the JavaScript environment.
     Value(Value),
 }
@@ -542,7 +418,6 @@ impl fmt::Display for Error {
                 write!(fmt, "error converting JavaScript {} to {}", from, to)
             }
             Error::Timeout => write!(fmt, "evaluation timed out"),
-            Error::InvalidTimeout => write!(fmt, "invalid request for evaluation timeout"),
             Error::Value(v) => write!(fmt, "JavaScript runtime error ({})", v.type_name()),
         }
     }
@@ -662,7 +537,7 @@ impl ToValue for i32 {
 
 impl ToValue for f64 {
     fn to_value(self, _mv8: &MiniV8) -> Result<Value> {
-        Ok(Value::Number(self as f64))
+        Ok(Value::Number(self))
     }
 }
 
