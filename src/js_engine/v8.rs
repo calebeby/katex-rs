@@ -20,9 +20,8 @@ fn convert_error(e: mini_v8::Error, engine: &mini_v8::MiniV8) -> Error {
         _ => Error::JsExecError({
             let formatted = format!("{e}");
             e.to_value(engine)
-                .coerce_string(engine)
-                .and_then(|s| Ok(s.to_string()))
-                .unwrap_or_else(|_| formatted)
+                .coerce_string(engine).map(|s| s.to_string())
+                .unwrap_or(formatted)
         }),
     }
 }
@@ -119,8 +118,8 @@ pub struct Value<'a> {
 
 impl<'a> JsValue<'a> for Value<'a> {
     fn into_string(self) -> Result<String> {
-        Ok(String::from_value(self.value, self.engine)
-            .map_err(|e| convert_error(e, &self.engine))?)
+        String::from_value(self.value, self.engine)
+            .map_err(|e| convert_error(e, self.engine))
     }
 }
 

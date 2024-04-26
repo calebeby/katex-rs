@@ -223,18 +223,18 @@ impl MiniV8 {
                 // on the interface stack during the current block:
                 let ptr: *mut v8::HandleScope<'static> = unsafe { std::mem::transmute(ptr) };
                 mv8.interface.push(ptr);
-                let this = Value::from_v8_value(&mv8, scope, fca.this().into());
+                let this = Value::from_v8_value(mv8, scope, fca.this().into());
                 let len = fca.length();
                 let mut args = Vec::with_capacity(len as usize);
                 for i in 0..len {
-                    args.push(Value::from_v8_value(&mv8, scope, fca.get(i)));
+                    args.push(Value::from_v8_value(mv8, scope, fca.get(i)));
                 }
-                match callback(&mv8, this, Values::from_vec(args)) {
+                match callback(mv8, this, Values::from_vec(args)) {
                     Ok(v) => {
                         rv.set(v.to_v8_value(scope));
                     }
                     Err(e) => {
-                        let exception = e.to_value(&mv8).to_v8_value(scope);
+                        let exception = e.to_value(mv8).to_v8_value(scope);
                         scope.throw_exception(exception);
                     }
                 };
@@ -273,7 +273,7 @@ impl MiniV8 {
     {
         let func = RefCell::new(func);
         self.create_function(move |invocation| {
-            (&mut *func
+            (*func
                 .try_borrow_mut()
                 .map_err(|_| Error::RecursiveMutCallback)?)(invocation)
         })
@@ -771,7 +771,7 @@ impl Value {
     /// circumstances (e.g. if the ECMAScript `ToString` implementation throws an error).
     pub(crate) fn coerce_string(&self, mv8: &MiniV8) -> Result<String> {
         match self {
-            &Value::String(ref s) => Ok(s.clone()),
+            Value::String(s) => Ok(s.clone()),
             value => mv8.try_catch(|scope| {
                 let maybe = value.to_v8_value(scope).to_string(scope);
                 mv8.exception(scope).map(|_| String {
@@ -933,7 +933,7 @@ impl Values {
         self.0.len()
     }
 
-    fn iter<'a>(&'a self) -> impl Iterator<Item = &'a Value> {
+    fn iter(&self) -> impl Iterator<Item = &'_ Value> {
         self.0.iter()
     }
 }
@@ -958,7 +958,7 @@ impl<'a> IntoIterator for &'a Values {
     type IntoIter = slice::Iter<'a, Value>;
 
     fn into_iter(self) -> Self::IntoIter {
-        (&self.0).into_iter()
+        self.0.iter()
     }
 }
 
