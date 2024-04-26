@@ -205,8 +205,7 @@ pub(crate) enum Value {
     String(String),
     /// Reference to a JavaScript function.
     Function(Function),
-    /// Reference to a JavaScript object. If a value is a function or an array in JavaScript, it
-    /// will be converted to `Value::Array` or `Value::Function` instead of `Value::Object`.
+    /// Reference to a JavaScript object.
     Object(Object),
 }
 
@@ -587,101 +586,43 @@ impl Object {
             self.mv8.exception(scope)
         })
     }
-
-    /// Returns an array containing all of this object's enumerable property keys. If
-    /// `include_inherited` is `false`, then only the object's own enumerable properties will be
-    /// collected (similar to `Object.getOwnPropertyNames` in Javascript). If `include_inherited` is
-    /// `true`, then the object's own properties and the enumerable properties from its prototype
-    /// chain will be collected.
-    fn keys(&self) -> Result<Array> {
-        self.mv8.try_catch(|scope| {
-            let object = v8::Local::new(scope, self.handle.clone());
-            let keys = object.get_own_property_names(scope, Default::default());
-            self.mv8.exception(scope)?;
-            Ok(Array {
-                mv8: self.mv8.clone(),
-                handle: v8::Global::new(scope, keys.unwrap()),
-            })
-        })
-    }
 }
 
 impl fmt::Debug for Object {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let keys = match self.keys() {
+        let keys = match self.mv8.try_catch(|scope| -> Result<Vec<String>> {
+            let object = v8::Local::new(scope, self.handle.clone());
+            let keys = object.get_own_property_names(scope, Default::default());
+            self.mv8.exception(scope)?;
+            let keys = keys.unwrap();
+            let len = keys.length();
+            let keys: Result<Vec<String>> = (0..len)
+                .map(|index| -> Result<String> {
+                    let key = keys.get_index(scope, index).unwrap();
+                    Value::from_v8_value(&self.mv8, scope, key).coerce_string(&self.mv8)
+                })
+                .collect();
+            keys
+        }) {
             Ok(keys) => keys,
             Err(_) => return write!(f, "<object with keys exception>"),
         };
 
-        let len = keys.len();
-        if len == 0 {
+        if keys.is_empty() {
             return write!(f, "{{}}");
         }
 
         write!(f, "{{ ")?;
-        for i in 0..len {
-            if let Ok(k) = keys
-                .get::<Value>(i)
-                .and_then(|k| k.coerce_string(&self.mv8))
-            {
-                write!(f, "{:?}: ", k)?;
-                match self.get::<_, Value>(k) {
-                    Ok(v) => write!(f, "{:?}", v)?,
-                    Err(_) => write!(f, "?")?,
-                };
-            } else {
-                write!(f, "?")?;
-            }
-            if i + 1 < len {
+        for (i, k) in keys.iter().cloned().enumerate() {
+            write!(f, "{:?}: ", k)?;
+            match self.get::<_, Value>(k) {
+                Ok(v) => write!(f, "{:?}", v)?,
+                Err(_) => write!(f, "?")?,
+            };
+            if i + 1 < keys.len() {
                 write!(f, ", ")?;
             }
         }
         write!(f, " }}")
-    }
-}
-
-#[derive(Clone)]
-pub(crate) struct Array {
-    mv8: MiniV8,
-    handle: v8::Global<v8::Array>,
-}
-
-impl Array {
-    /// Get the value using the given array index. Returns `Value::Undefined` if no element at the
-    /// index exists.
-    ///
-    /// Returns an error if `FromValue::from_value` fails for the element.
-    fn get<V: FromValue>(&self, index: u32) -> Result<V> {
-        self.mv8
-            .try_catch(|scope| {
-                let array = v8::Local::new(scope, self.handle.clone());
-                let result = array.get_index(scope, index);
-                self.mv8.exception(scope)?;
-                Ok(Value::from_v8_value(&self.mv8, scope, result.unwrap()))
-            })
-            .and_then(|v| v.into(&self.mv8))
-    }
-
-    /// Returns the number of elements in the array.
-    fn len(&self) -> u32 {
-        self.mv8
-            .scope(|scope| v8::Local::new(scope, self.handle.clone()).length())
-    }
-}
-
-impl fmt::Debug for Array {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let len = self.len();
-        write!(f, "[")?;
-        for i in 0..len {
-            match self.get::<Value>(i) {
-                Ok(v) => write!(f, "{:?}", v)?,
-                Err(_) => write!(f, "?")?,
-            };
-            if i + 1 < len {
-                write!(f, ", ")?;
-            }
-        }
-        write!(f, "]")
     }
 }

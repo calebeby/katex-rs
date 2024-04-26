@@ -7,7 +7,7 @@ use crate::{
 use core::fmt;
 use mini_v8::{FromValue, ToValue};
 
-/// Duktape Engine.
+/// v8 Engine.
 pub struct Engine(mini_v8::MiniV8);
 
 mod mini_v8;
@@ -15,7 +15,6 @@ mod mini_v8;
 fn convert_error(e: mini_v8::Error, engine: &mini_v8::MiniV8) -> Error {
     match e {
         mini_v8::Error::FromJsConversionError { .. } => Error::JsValueError(format!("{e}")),
-        // e.to_value(engine).coerce_string(&self.0)?
         _ => Error::JsExecError({
             let formatted = format!("{e}");
             e.to_value(engine)
