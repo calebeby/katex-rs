@@ -10,6 +10,8 @@ use mini_v8::{FromValue, ToValue};
 /// Duktape Engine.
 pub struct Engine(mini_v8::MiniV8);
 
+mod mini_v8;
+
 fn convert_error(e: mini_v8::Error, engine: &mini_v8::MiniV8) -> Error {
     match e {
         mini_v8::Error::ToJsConversionError { .. }

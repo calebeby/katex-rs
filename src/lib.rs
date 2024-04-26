@@ -28,7 +28,7 @@
 //! let html_in_display_mode = katex::render_with_opts("E = mc^2", &opts).unwrap();
 //! ```
 
-#![forbid(unsafe_code)]
+// #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
 pub mod error;
