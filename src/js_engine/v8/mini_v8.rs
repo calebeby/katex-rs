@@ -17,12 +17,12 @@ use std::time::Duration;
 use std::vec;
 
 #[derive(Clone)]
-pub struct MiniV8 {
+pub(crate) struct MiniV8 {
     interface: Interface,
 }
 
 impl MiniV8 {
-    pub fn new() -> MiniV8 {
+    pub(crate) fn new() -> MiniV8 {
         initialize_v8();
         let mut isolate = v8::Isolate::new(Default::default());
         initialize_slots(&mut isolate);
@@ -32,7 +32,7 @@ impl MiniV8 {
     }
 
     /// Returns the global JavaScript object.
-    pub fn global(&self) -> Object {
+    pub(crate) fn global(&self) -> Object {
         self.scope(|scope| {
             let global = scope.get_current_context().global(scope);
             Object {
@@ -43,7 +43,7 @@ impl MiniV8 {
     }
 
     /// Executes a JavaScript script and returns its result.
-    pub fn eval<S, R>(&self, script: S) -> Result<R>
+    pub(crate) fn eval<S, R>(&self, script: S) -> Result<R>
     where
         S: Into<Script>,
         R: FromValue,
@@ -94,7 +94,7 @@ impl MiniV8 {
     /// Inserts any sort of keyed value of type `T` into the `MiniV8`, typically for later retrieval
     /// from within Rust functions called from within JavaScript. If a value already exists with the
     /// key, it is returned.
-    pub fn set_user_data<K, T>(&self, key: K, data: T) -> Option<Box<dyn Any>>
+    fn set_user_data<K, T>(&self, key: K, data: T) -> Option<Box<dyn Any>>
     where
         K: ToString,
         T: Any,
@@ -106,7 +106,7 @@ impl MiniV8 {
     /// Calls a function with a user data value by its key, or `None` if no value exists with the
     /// key. If a value exists but it is not of the type `T`, `None` is returned. This is typically
     /// used by a Rust function called from within JavaScript.
-    pub fn use_user_data<F, T: Any, U>(&self, key: &str, func: F) -> U
+    fn use_user_data<F, T: Any, U>(&self, key: &str, func: F) -> U
     where
         F: FnOnce(Option<&T>) -> U + 'static,
     {
@@ -116,7 +116,7 @@ impl MiniV8 {
 
     /// Removes and returns a user data value by its key. Returns `None` if no value exists with the
     /// key.
-    pub fn remove_user_data(&self, key: &str) -> Option<Box<dyn Any>> {
+    fn remove_user_data(&self, key: &str) -> Option<Box<dyn Any>> {
         self.interface
             .use_slot(|m: &AnyMap| m.0.borrow_mut().remove(key))
     }
@@ -126,7 +126,7 @@ impl MiniV8 {
     /// # Panics
     ///
     /// Panics if source value is longer than `(1 << 28) - 16` bytes.
-    pub fn create_string(&self, value: &str) -> String {
+    fn create_string(&self, value: &str) -> String {
         self.scope(|scope| {
             let string = create_string(scope, value);
             String {
@@ -137,7 +137,7 @@ impl MiniV8 {
     }
 
     /// Creates and returns an empty `Array` managed by V8.
-    pub fn create_array(&self) -> Array {
+    fn create_array(&self) -> Array {
         self.scope(|scope| {
             let array = v8::Array::new(scope, 0);
             Array {
@@ -148,7 +148,7 @@ impl MiniV8 {
     }
 
     /// Creates and returns an empty `Object` managed by V8.
-    pub fn create_object(&self) -> Object {
+    pub(crate) fn create_object(&self) -> Object {
         self.scope(|scope| {
             let object = v8::Object::new(scope);
             Object {
@@ -163,7 +163,7 @@ impl MiniV8 {
     ///
     /// This is a thin wrapper around `MiniV8::create_object` and `Object::set`. See `Object::set`
     /// for how this method might return an error.
-    pub fn create_object_from<K, V, I>(&self, iter: I) -> Result<Object>
+    fn create_object_from<K, V, I>(&self, iter: I) -> Result<Object>
     where
         K: ToValue,
         V: ToValue,
@@ -187,7 +187,7 @@ impl MiniV8 {
     /// For details on Rust-to-JavaScript conversions, refer to the `ToValue` and `ToValues` traits.
     ///
     /// If the provided function panics, the executable will be aborted.
-    pub fn create_function<F, R>(&self, func: F) -> Function
+    fn create_function<F, R>(&self, func: F) -> Function
     where
         F: Fn(Invocation) -> Result<R> + 'static,
         R: ToValue,
@@ -266,7 +266,7 @@ impl MiniV8 {
     ///
     /// This is a version of `create_function` that accepts a FnMut argument. Refer to
     /// `create_function` for more information about the implementation.
-    pub fn create_function_mut<F, R>(&self, func: F) -> Function
+    fn create_function_mut<F, R>(&self, func: F) -> Function
     where
         F: FnMut(Invocation) -> Result<R> + 'static,
         R: ToValue,
@@ -281,7 +281,7 @@ impl MiniV8 {
 
     // Opens a new handle scope in the global context. Nesting calls to this or `MiniV8::try_catch`
     // will cause a panic (unless a callback is entered, see `MiniV8::create_function`).
-    pub(crate) fn scope<F, T>(&self, func: F) -> T
+    fn scope<F, T>(&self, func: F) -> T
     where
         F: FnOnce(&mut v8::ContextScope<v8::HandleScope>) -> T,
     {
@@ -290,14 +290,14 @@ impl MiniV8 {
 
     // Opens a new try-catch scope in the global context. Nesting calls to this or `MiniV8::scope`
     // will cause a panic (unless a callback is entered, see `MiniV8::create_function`).
-    pub(crate) fn try_catch<F, T>(&self, func: F) -> T
+    fn try_catch<F, T>(&self, func: F) -> T
     where
         F: FnOnce(&mut v8::TryCatch<v8::HandleScope>) -> T,
     {
         self.interface.try_catch(func)
     }
 
-    pub(crate) fn exception(&self, scope: &mut v8::TryCatch<v8::HandleScope>) -> Result<()> {
+    fn exception(&self, scope: &mut v8::TryCatch<v8::HandleScope>) -> Result<()> {
         if scope.has_terminated() {
             Err(Error::Timeout)
         } else if let Some(exception) = scope.exception() {
@@ -479,9 +479,9 @@ struct AnyMap(Rc<RefCell<BTreeMap<StdString, Box<dyn Any>>>>);
 
 // A JavaScript script.
 #[derive(Clone, Debug, Default)]
-pub struct Script {
+struct Script {
     /// The source of the script.
-    pub source: StdString,
+    source: StdString,
     /// The maximum runtime duration of the script's execution. This cannot be set within a nested
     /// evaluation, i.e. it cannot be set when calling `MiniV8::eval` from within a `Function`
     /// created with `MiniV8::create_function` or `MiniV8::create_function_mut`.
@@ -489,20 +489,20 @@ pub struct Script {
     /// V8 can only cancel script evaluation while running actual JavaScript code. If Rust code is
     /// being executed when the timeout is triggered, the execution will continue until the
     /// evaluation has returned to running JavaScript code.
-    pub timeout: Option<Duration>,
+    timeout: Option<Duration>,
     /// The script's origin.
-    pub origin: Option<ScriptOrigin>,
+    origin: Option<ScriptOrigin>,
 }
 
 /// The origin, within a file, of a JavaScript script.
 #[derive(Clone, Debug, Default)]
-pub struct ScriptOrigin {
+struct ScriptOrigin {
     /// The name of the file this script belongs to.
-    pub name: StdString,
+    name: StdString,
     /// The line at which this script starts.
-    pub line_offset: i32,
+    line_offset: i32,
     /// The column at which this script starts.
-    pub column_offset: i32,
+    column_offset: i32,
 }
 
 impl From<StdString> for Script {
@@ -553,7 +553,7 @@ fn execute_with_timeout<T>(
 /// types defers to Rust's `Copy`, while cloning values of the referential types results in a simple
 /// reference clone similar to JavaScript's own "by-reference" semantics.
 #[derive(Clone)]
-pub enum Value {
+pub(crate) enum Value {
     /// The JavaScript value `undefined`.
     Undefined,
     /// The JavaScript value `null`.
@@ -577,7 +577,7 @@ pub enum Value {
 
 impl Value {
     /// Returns `true` if this is a `Value::Undefined`, `false` otherwise.
-    pub fn is_undefined(&self) -> bool {
+    fn is_undefined(&self) -> bool {
         if let Value::Undefined = *self {
             true
         } else {
@@ -586,7 +586,7 @@ impl Value {
     }
 
     /// Returns `true` if this is a `Value::Null`, `false` otherwise.
-    pub fn is_null(&self) -> bool {
+    fn is_null(&self) -> bool {
         if let Value::Null = *self {
             true
         } else {
@@ -595,7 +595,7 @@ impl Value {
     }
 
     /// Returns `true` if this is a `Value::Boolean`, `false` otherwise.
-    pub fn is_boolean(&self) -> bool {
+    fn is_boolean(&self) -> bool {
         if let Value::Boolean(_) = *self {
             true
         } else {
@@ -604,7 +604,7 @@ impl Value {
     }
 
     /// Returns `true` if this is a `Value::Number`, `false` otherwise.
-    pub fn is_number(&self) -> bool {
+    fn is_number(&self) -> bool {
         if let Value::Number(_) = *self {
             true
         } else {
@@ -613,7 +613,7 @@ impl Value {
     }
 
     /// Returns `true` if this is a `Value::Date`, `false` otherwise.
-    pub fn is_date(&self) -> bool {
+    fn is_date(&self) -> bool {
         if let Value::Date(_) = *self {
             true
         } else {
@@ -622,7 +622,7 @@ impl Value {
     }
 
     /// Returns `true` if this is a `Value::String`, `false` otherwise.
-    pub fn is_string(&self) -> bool {
+    fn is_string(&self) -> bool {
         if let Value::String(_) = *self {
             true
         } else {
@@ -631,7 +631,7 @@ impl Value {
     }
 
     /// Returns `true` if this is a `Value::Array`, `false` otherwise.
-    pub fn is_array(&self) -> bool {
+    fn is_array(&self) -> bool {
         if let Value::Array(_) = *self {
             true
         } else {
@@ -640,7 +640,7 @@ impl Value {
     }
 
     /// Returns `true` if this is a `Value::Function`, `false` otherwise.
-    pub fn is_function(&self) -> bool {
+    fn is_function(&self) -> bool {
         if let Value::Function(_) = *self {
             true
         } else {
@@ -649,7 +649,7 @@ impl Value {
     }
 
     /// Returns `true` if this is a `Value::Object`, `false` otherwise.
-    pub fn is_object(&self) -> bool {
+    fn is_object(&self) -> bool {
         if let Value::Object(_) = *self {
             true
         } else {
@@ -658,7 +658,7 @@ impl Value {
     }
 
     /// Returns `Some(())` if this is a `Value::Undefined`, `None` otherwise.
-    pub fn as_undefined(&self) -> Option<()> {
+    fn as_undefined(&self) -> Option<()> {
         if let Value::Undefined = *self {
             Some(())
         } else {
@@ -667,7 +667,7 @@ impl Value {
     }
 
     /// Returns `Some(())` if this is a `Value::Null`, `None` otherwise.
-    pub fn as_null(&self) -> Option<()> {
+    fn as_null(&self) -> Option<()> {
         if let Value::Undefined = *self {
             Some(())
         } else {
@@ -676,7 +676,7 @@ impl Value {
     }
 
     /// Returns `Some` if this is a `Value::Boolean`, `None` otherwise.
-    pub fn as_boolean(&self) -> Option<bool> {
+    fn as_boolean(&self) -> Option<bool> {
         if let Value::Boolean(value) = *self {
             Some(value)
         } else {
@@ -685,7 +685,7 @@ impl Value {
     }
 
     /// Returns `Some` if this is a `Value::Number`, `None` otherwise.
-    pub fn as_number(&self) -> Option<f64> {
+    fn as_number(&self) -> Option<f64> {
         if let Value::Number(value) = *self {
             Some(value)
         } else {
@@ -694,7 +694,7 @@ impl Value {
     }
 
     /// Returns `Some` if this is a `Value::Date`, `None` otherwise.
-    pub fn as_date(&self) -> Option<f64> {
+    fn as_date(&self) -> Option<f64> {
         if let Value::Date(value) = *self {
             Some(value)
         } else {
@@ -703,7 +703,7 @@ impl Value {
     }
 
     /// Returns `Some` if this is a `Value::String`, `None` otherwise.
-    pub fn as_string(&self) -> Option<&String> {
+    fn as_string(&self) -> Option<&String> {
         if let Value::String(ref value) = *self {
             Some(value)
         } else {
@@ -712,7 +712,7 @@ impl Value {
     }
 
     /// Returns `Some` if this is a `Value::Array`, `None` otherwise.
-    pub fn as_array(&self) -> Option<&Array> {
+    fn as_array(&self) -> Option<&Array> {
         if let Value::Array(ref value) = *self {
             Some(value)
         } else {
@@ -721,7 +721,7 @@ impl Value {
     }
 
     /// Returns `Some` if this is a `Value::Function`, `None` otherwise.
-    pub fn as_function(&self) -> Option<&Function> {
+    fn as_function(&self) -> Option<&Function> {
         if let Value::Function(ref value) = *self {
             Some(value)
         } else {
@@ -730,7 +730,7 @@ impl Value {
     }
 
     /// Returns `Some` if this is a `Value::Object`, `None` otherwise.
-    pub fn as_object(&self) -> Option<&Object> {
+    fn as_object(&self) -> Option<&Object> {
         if let Value::Object(ref value) = *self {
             Some(value)
         } else {
@@ -739,12 +739,12 @@ impl Value {
     }
 
     /// A wrapper around `FromValue::from_value`.
-    pub fn into<T: FromValue>(self, mv8: &MiniV8) -> Result<T> {
+    fn into<T: FromValue>(self, mv8: &MiniV8) -> Result<T> {
         T::from_value(self, mv8)
     }
 
     /// Coerces a value to a boolean. Returns `true` if the value is "truthy", `false` otherwise.
-    pub fn coerce_boolean(&self, mv8: &MiniV8) -> bool {
+    fn coerce_boolean(&self, mv8: &MiniV8) -> bool {
         match self {
             &Value::Boolean(b) => b,
             value => mv8.scope(|scope| value.to_v8_value(scope).boolean_value(scope)),
@@ -756,7 +756,7 @@ impl Value {
     /// `ToNumber` implementation throws an error).
     ///
     /// This will return `std::f64::NAN` if the value has no numerical equivalent.
-    pub fn coerce_number(&self, mv8: &MiniV8) -> Result<f64> {
+    fn coerce_number(&self, mv8: &MiniV8) -> Result<f64> {
         match self {
             &Value::Number(n) => Ok(n),
             value => mv8.try_catch(|scope| {
@@ -769,7 +769,7 @@ impl Value {
     /// Coerces a value to a string. Nearly all JavaScript values are coercible to strings, but this
     /// may fail with a runtime error if `toString()` fails or under otherwise extraordinary
     /// circumstances (e.g. if the ECMAScript `ToString` implementation throws an error).
-    pub fn coerce_string(&self, mv8: &MiniV8) -> Result<String> {
+    pub(crate) fn coerce_string(&self, mv8: &MiniV8) -> Result<String> {
         match self {
             &Value::String(ref s) => Ok(s.clone()),
             value => mv8.try_catch(|scope| {
@@ -782,7 +782,7 @@ impl Value {
         }
     }
 
-    pub(crate) fn type_name(&self) -> &'static str {
+    fn type_name(&self) -> &'static str {
         match *self {
             Value::Undefined => "undefined",
             Value::Null => "null",
@@ -796,7 +796,7 @@ impl Value {
         }
     }
 
-    pub(crate) fn from_v8_value(
+    fn from_v8_value(
         mv8: &MiniV8,
         scope: &mut v8::HandleScope,
         value: v8::Local<v8::Value>,
@@ -847,10 +847,7 @@ impl Value {
         }
     }
 
-    pub(crate) fn to_v8_value<'s>(
-        &self,
-        scope: &mut v8::HandleScope<'s>,
-    ) -> v8::Local<'s, v8::Value> {
+    fn to_v8_value<'s>(&self, scope: &mut v8::HandleScope<'s>) -> v8::Local<'s, v8::Value> {
         match self {
             Value::Undefined => v8::undefined(scope).into(),
             Value::Null => v8::null(scope).into(),
@@ -882,43 +879,43 @@ impl fmt::Debug for Value {
 }
 
 /// Trait for types convertible to `Value`.
-pub trait ToValue {
+pub(crate) trait ToValue {
     /// Performs the conversion.
     fn to_value(self, mv8: &MiniV8) -> Result<Value>;
 }
 
 /// Trait for types convertible from `Value`.
-pub trait FromValue: Sized {
+pub(crate) trait FromValue: Sized {
     /// Performs the conversion.
     fn from_value(value: Value, mv8: &MiniV8) -> Result<Self>;
 }
 
 /// A collection of multiple JavaScript values used for interacting with function arguments.
 #[derive(Clone)]
-pub struct Values(Vec<Value>);
+pub(crate) struct Values(Vec<Value>);
 
 impl Values {
     /// Creates an empty `Values`.
-    pub fn new() -> Values {
+    fn new() -> Values {
         Values(Vec::new())
     }
 
-    pub fn from_vec(vec: Vec<Value>) -> Values {
+    fn from_vec(vec: Vec<Value>) -> Values {
         Values(vec)
     }
 
-    pub fn into_vec(self) -> Vec<Value> {
+    fn into_vec(self) -> Vec<Value> {
         self.0
     }
 
-    pub fn get(&self, index: usize) -> Value {
+    fn get(&self, index: usize) -> Value {
         self.0
             .get(index)
             .map(Clone::clone)
             .unwrap_or(Value::Undefined)
     }
 
-    pub fn from<T: FromValue>(&self, mv8: &MiniV8, index: usize) -> Result<T> {
+    fn from<T: FromValue>(&self, mv8: &MiniV8, index: usize) -> Result<T> {
         T::from_value(
             self.0
                 .get(index)
@@ -928,15 +925,15 @@ impl Values {
         )
     }
 
-    pub fn into<T: FromValues>(self, mv8: &MiniV8) -> Result<T> {
+    fn into<T: FromValues>(self, mv8: &MiniV8) -> Result<T> {
         T::from_values(self, mv8)
     }
 
-    pub fn len(&self) -> usize {
+    fn len(&self) -> usize {
         self.0.len()
     }
 
-    pub fn iter<'a>(&'a self) -> impl Iterator<Item = &'a Value> {
+    fn iter<'a>(&'a self) -> impl Iterator<Item = &'a Value> {
         self.0.iter()
     }
 }
@@ -969,7 +966,7 @@ impl<'a> IntoIterator for &'a Values {
 ///
 /// This is a generalization of `ToValue`, allowing any number of resulting JavaScript values
 /// instead of just one. Any type that implements `ToValue` will automatically implement this trait.
-pub trait ToValues {
+trait ToValues {
     /// Performs the conversion.
     fn to_values(self, mv8: &MiniV8) -> Result<Values>;
 }
@@ -979,7 +976,7 @@ pub trait ToValues {
 /// This is a generalization of `FromValue`, allowing an arbitrary number of JavaScript values to
 /// participate in the conversion. Any type that implements `FromValue` will automatically implement
 /// this trait.
-pub trait FromValues: Sized {
+trait FromValues: Sized {
     /// Performs the conversion.
     ///
     /// In case `values` contains more values than needed to perform the conversion, the excess
@@ -995,19 +992,19 @@ pub trait FromValues: Sized {
 /// `T` using [`FromValue`]. `Variadic<T>` can also be returned from a callback, returning a
 /// variable number of values to JavaScript.
 #[derive(Clone)]
-pub struct Variadic<T>(pub(crate) Vec<T>);
+struct Variadic<T>(Vec<T>);
 
 impl<T> Variadic<T> {
     /// Creates an empty `Variadic` wrapper containing no values.
-    pub fn new() -> Variadic<T> {
+    fn new() -> Variadic<T> {
         Variadic(Vec::new())
     }
 
-    pub fn from_vec(vec: Vec<T>) -> Variadic<T> {
+    fn from_vec(vec: Vec<T>) -> Variadic<T> {
         Variadic(vec)
     }
 
-    pub fn into_vec(self) -> Vec<T> {
+    fn into_vec(self) -> Vec<T> {
         self.0
     }
 }
@@ -1042,11 +1039,11 @@ impl<T> DerefMut for Variadic<T> {
 }
 
 /// `std::result::Result` specialized for this crate's `Error` type.
-pub type Result<T> = StdResult<T, Error>;
+type Result<T> = StdResult<T, Error>;
 
 /// An error originating from `MiniV8` usage.
 #[derive(Debug)]
-pub enum Error {
+pub(crate) enum Error {
     /// A Rust value could not be converted to a JavaScript value.
     ToJsConversionError {
         /// Name of the Rust type that could not be converted.
@@ -1080,7 +1077,7 @@ pub enum Error {
 
 impl Error {
     /// Normalizes an error into a JavaScript value.
-    pub fn to_value(self, mv8: &MiniV8) -> Value {
+    pub(crate) fn to_value(self, mv8: &MiniV8) -> Value {
         match self {
             Error::Value(value) => value,
             Error::ToJsConversionError { .. } | Error::FromJsConversionError { .. } => {
@@ -1098,7 +1095,7 @@ impl Error {
         }
     }
 
-    pub(crate) fn from_js_conversion(from: &'static str, to: &'static str) -> Error {
+    fn from_js_conversion(from: &'static str, to: &'static str) -> Error {
         Error::FromJsConversionError { from, to }
     }
 }
@@ -1128,14 +1125,14 @@ impl fmt::Display for Error {
 }
 
 #[derive(Clone)]
-pub struct Function {
-    pub(crate) mv8: MiniV8,
-    pub(crate) handle: v8::Global<v8::Function>,
+pub(crate) struct Function {
+    mv8: MiniV8,
+    handle: v8::Global<v8::Function>,
 }
 
 impl Function {
     /// Consumes the function and downgrades it to a JavaScript object.
-    pub fn into_object(self) -> Object {
+    fn into_object(self) -> Object {
         self.mv8.clone().scope(|scope| {
             let object: v8::Local<v8::Object> = v8::Local::new(scope, self.handle.clone()).into();
             Object {
@@ -1146,7 +1143,7 @@ impl Function {
     }
 
     /// Calls the function with the given arguments, with `this` set to `undefined`.
-    pub fn call<A, R>(&self, args: A) -> Result<R>
+    pub(crate) fn call<A, R>(&self, args: A) -> Result<R>
     where
         A: ToValues,
         R: FromValue,
@@ -1155,7 +1152,7 @@ impl Function {
     }
 
     /// Calls the function with the given `this` and arguments.
-    pub fn call_method<T, A, R>(&self, this: T, args: A) -> Result<R>
+    fn call_method<T, A, R>(&self, this: T, args: A) -> Result<R>
     where
         T: ToValue,
         A: ToValues,
@@ -1177,7 +1174,7 @@ impl Function {
     }
 
     /// Calls the function as a constructor function with the given arguments.
-    pub fn call_new<A, R>(&self, args: A) -> Result<R>
+    fn call_new<A, R>(&self, args: A) -> Result<R>
     where
         A: ToValues,
         R: FromValue,
@@ -1208,24 +1205,24 @@ impl fmt::Debug for Function {
 
 /// A bundle of information about an invocation of a function that has been embedded from Rust into
 /// JavaScript.
-pub struct Invocation {
+struct Invocation {
     /// The `MiniV8` within which the function was called.
-    pub mv8: MiniV8,
+    mv8: MiniV8,
     /// The value of the function invocation's `this` binding.
-    pub this: Value,
+    this: Value,
     /// The list of arguments with which the function was called.
-    pub args: Values,
+    args: Values,
 }
 
 #[derive(Clone)]
-pub struct String {
-    pub(crate) mv8: MiniV8,
-    pub(crate) handle: v8::Global<v8::String>,
+pub(crate) struct String {
+    mv8: MiniV8,
+    handle: v8::Global<v8::String>,
 }
 
 impl String {
     /// Returns a Rust string converted from the V8 string.
-    pub fn to_string(&self) -> StdString {
+    pub(crate) fn to_string(&self) -> StdString {
         self.mv8
             .scope(|scope| v8::Local::new(scope, self.handle.clone()).to_rust_string_lossy(scope))
     }
@@ -1643,9 +1640,9 @@ impl_tuple!(A, B, C, D, E, F, G, H, I, J, K, L, M, N, O);
 impl_tuple!(A, B, C, D, E, F, G, H, I, J, K, L, M, N, O, P);
 
 #[derive(Clone)]
-pub struct Object {
-    pub(crate) mv8: MiniV8,
-    pub(crate) handle: v8::Global<v8::Object>,
+pub(crate) struct Object {
+    mv8: MiniV8,
+    handle: v8::Global<v8::Object>,
 }
 
 impl Object {
@@ -1654,7 +1651,7 @@ impl Object {
     ///
     /// Returns an error if `ToValue::to_value` fails for the key or if the key value could not be
     /// cast to a property key string.
-    pub fn get<K: ToValue, V: FromValue>(&self, key: K) -> Result<V> {
+    pub(crate) fn get<K: ToValue, V: FromValue>(&self, key: K) -> Result<V> {
         let key = key.to_value(&self.mv8)?;
         self.mv8
             .try_catch(|scope| {
@@ -1671,7 +1668,7 @@ impl Object {
     ///
     /// Returns an error if `ToValue::to_value` fails for either the key or the value or if the key
     /// value could not be cast to a property key string.
-    pub fn set<K: ToValue, V: ToValue>(&self, key: K, value: V) -> Result<()> {
+    pub(crate) fn set<K: ToValue, V: ToValue>(&self, key: K, value: V) -> Result<()> {
         let key = key.to_value(&self.mv8)?;
         let value = value.to_value(&self.mv8)?;
         self.mv8.try_catch(|scope| {
@@ -1688,7 +1685,7 @@ impl Object {
     ///
     /// Returns an error if `ToValue::to_value` fails for the key or if the key value could not be
     /// cast to a property key string.
-    pub fn remove<K: ToValue>(&self, key: K) -> Result<()> {
+    fn remove<K: ToValue>(&self, key: K) -> Result<()> {
         let key = key.to_value(&self.mv8)?;
         self.mv8.try_catch(|scope| {
             let object = v8::Local::new(scope, self.handle.clone());
@@ -1702,7 +1699,7 @@ impl Object {
     ///
     /// Returns an error if `ToValue::to_value` fails for the key or if the key value could not be
     /// cast to a property key string.
-    pub fn has<K: ToValue>(&self, key: K) -> Result<bool> {
+    fn has<K: ToValue>(&self, key: K) -> Result<bool> {
         let key = key.to_value(&self.mv8)?;
         self.mv8.try_catch(|scope| {
             let object = v8::Local::new(scope, self.handle.clone());
@@ -1715,7 +1712,7 @@ impl Object {
 
     /// Calls the function at the key with the given arguments, with `this` set to the object.
     /// Returns an error if the value at the key is not a function.
-    pub fn call_prop<K, A, R>(&self, key: K, args: A) -> Result<R>
+    fn call_prop<K, A, R>(&self, key: K, args: A) -> Result<R>
     where
         K: ToValue,
         A: ToValues,
@@ -1730,7 +1727,7 @@ impl Object {
     /// collected (similar to `Object.getOwnPropertyNames` in Javascript). If `include_inherited` is
     /// `true`, then the object's own properties and the enumerable properties from its prototype
     /// chain will be collected.
-    pub fn keys(&self, include_inherited: bool) -> Result<Array> {
+    fn keys(&self, include_inherited: bool) -> Result<Array> {
         self.mv8.try_catch(|scope| {
             let object = v8::Local::new(scope, self.handle.clone());
             let keys = if include_inherited {
@@ -1750,7 +1747,7 @@ impl Object {
     /// `for-in` loop.
     ///
     /// For information on the `include_inherited` argument, see `Object::keys`.
-    pub fn properties<K, V>(self, include_inherited: bool) -> Result<Properties<K, V>>
+    fn properties<K, V>(self, include_inherited: bool) -> Result<Properties<K, V>>
     where
         K: FromValue,
         V: FromValue,
@@ -1800,7 +1797,7 @@ impl fmt::Debug for Object {
 }
 
 /// An iterator over an object's keys and values, acting like a `for-in` loop.
-pub struct Properties<K, V> {
+struct Properties<K, V> {
     object: Object,
     keys: Array,
     index: u32,
@@ -1844,14 +1841,14 @@ where
 }
 
 #[derive(Clone)]
-pub struct Array {
-    pub(crate) mv8: MiniV8,
-    pub(crate) handle: v8::Global<v8::Array>,
+struct Array {
+    mv8: MiniV8,
+    handle: v8::Global<v8::Array>,
 }
 
 impl Array {
     /// Consumes the array and downgrades it to a JavaScript object.
-    pub fn into_object(self) -> Object {
+    fn into_object(self) -> Object {
         self.mv8.clone().scope(|scope| {
             let object: v8::Local<v8::Object> = v8::Local::new(scope, self.handle.clone()).into();
             Object {
@@ -1865,7 +1862,7 @@ impl Array {
     /// index exists.
     ///
     /// Returns an error if `FromValue::from_value` fails for the element.
-    pub fn get<V: FromValue>(&self, index: u32) -> Result<V> {
+    fn get<V: FromValue>(&self, index: u32) -> Result<V> {
         self.mv8
             .try_catch(|scope| {
                 let array = v8::Local::new(scope, self.handle.clone());
@@ -1879,7 +1876,7 @@ impl Array {
     /// Sets an array element using the given index and value.
     ///
     /// Returns an error if `ToValue::to_value` fails for the value.
-    pub fn set<V: ToValue>(&self, index: u32, value: V) -> Result<()> {
+    fn set<V: ToValue>(&self, index: u32, value: V) -> Result<()> {
         let value = value.to_value(&self.mv8)?;
         self.mv8.try_catch(|scope| {
             let array = v8::Local::new(scope, self.handle.clone());
@@ -1890,14 +1887,14 @@ impl Array {
     }
 
     /// Returns the number of elements in the array.
-    pub fn len(&self) -> u32 {
+    fn len(&self) -> u32 {
         self.mv8
             .scope(|scope| v8::Local::new(scope, self.handle.clone()).length())
     }
 
     /// Pushes an element to the end of the array. This is a shortcut for `set` using `len` as the
     /// index.
-    pub fn push<V: ToValue>(&self, value: V) -> Result<()> {
+    fn push<V: ToValue>(&self, value: V) -> Result<()> {
         self.set(self.len(), value)
     }
 }
