@@ -344,8 +344,6 @@ pub(crate) enum Value {
     Boolean(bool),
     /// A JavaScript floating point number.
     Number(f64),
-    /// Elapsed milliseconds since Unix epoch.
-    Date(f64),
     /// An immutable JavaScript string, managed by V8.
     String(String),
     /// Reference to a JavaScript arrray.
@@ -371,21 +369,6 @@ impl Value {
         }
     }
 
-    /// Coerces a value to a number. Nearly all JavaScript values are coercible to numbers, but this
-    /// may fail with a runtime error under extraordinary circumstances (e.g. if the ECMAScript
-    /// `ToNumber` implementation throws an error).
-    ///
-    /// This will return `std::f64::NAN` if the value has no numerical equivalent.
-    fn coerce_number(&self, mv8: &MiniV8) -> Result<f64> {
-        match self {
-            &Value::Number(n) => Ok(n),
-            value => mv8.try_catch(|scope| {
-                let maybe = value.to_v8_value(scope).to_number(scope);
-                mv8.exception(scope).map(|_| maybe.unwrap().value())
-            }),
-        }
-    }
-
     /// Coerces a value to a string. Nearly all JavaScript values are coercible to strings, but this
     /// may fail with a runtime error if `toString()` fails or under otherwise extraordinary
     /// circumstances (e.g. if the ECMAScript `ToString` implementation throws an error).
@@ -408,7 +391,6 @@ impl Value {
             Value::Null => "null",
             Value::Boolean(_) => "boolean",
             Value::Number(_) => "number",
-            Value::Date(_) => "date",
             Value::Function(_) => "function",
             Value::Array(_) => "array",
             Value::Object(_) => "object",
@@ -431,9 +413,6 @@ impl Value {
             Value::Number(value.int32_value(scope).unwrap() as f64)
         } else if value.is_number() {
             Value::Number(value.number_value(scope).unwrap())
-        } else if value.is_date() {
-            let value: v8::Local<v8::Date> = value.try_into().unwrap();
-            Value::Date(value.value_of())
         } else if value.is_string() {
             let value: v8::Local<v8::String> = value.try_into().unwrap();
             let handle = v8::Global::new(scope, value);
@@ -473,7 +452,6 @@ impl Value {
             Value::Null => v8::null(scope).into(),
             Value::Boolean(v) => v8::Boolean::new(scope, *v).into(),
             Value::Number(v) => v8::Number::new(scope, *v).into(),
-            Value::Date(v) => v8::Date::new(scope, *v).unwrap().into(),
             Value::Function(v) => v8::Local::new(scope, v.handle.clone()).into(),
             Value::Array(v) => v8::Local::new(scope, v.handle.clone()).into(),
             Value::Object(v) => v8::Local::new(scope, v.handle.clone()).into(),
@@ -489,7 +467,6 @@ impl fmt::Debug for Value {
             Value::Null => write!(f, "null"),
             Value::Boolean(b) => write!(f, "{:?}", b),
             Value::Number(n) => write!(f, "{}", n),
-            Value::Date(d) => write!(f, "date:{}", d),
             Value::String(s) => write!(f, "{:?}", s),
             Value::Array(a) => write!(f, "{:?}", a),
             Value::Function(u) => write!(f, "{:?}", u),
@@ -938,53 +915,15 @@ impl<'a> ToValue for &'a str {
     }
 }
 
-macro_rules! convert_number {
-    ($prim_ty: ty) => {
-        impl ToValue for $prim_ty {
-            fn to_value(self, _mv8: &MiniV8) -> Result<Value> {
-                Ok(Value::Number(self as f64))
-            }
-        }
-
-        impl FromValue for $prim_ty {
-            fn from_value(value: Value, mv8: &MiniV8) -> Result<Self> {
-                Ok(value.coerce_number(mv8)? as $prim_ty)
-            }
-        }
-    };
-}
-
-convert_number!(i8);
-convert_number!(u8);
-convert_number!(i16);
-convert_number!(u16);
-convert_number!(i32);
-convert_number!(u32);
-convert_number!(i64);
-convert_number!(u64);
-convert_number!(isize);
-convert_number!(usize);
-convert_number!(f32);
-convert_number!(f64);
-
-impl ToValue for Duration {
+impl ToValue for i32 {
     fn to_value(self, _mv8: &MiniV8) -> Result<Value> {
-        Ok(Value::Date(
-            (self.as_secs() as f64) + (self.as_nanos() as f64) / 1_000_000_000.0,
-        ))
+        Ok(Value::Number(self as f64))
     }
 }
 
-impl FromValue for Duration {
-    fn from_value(value: Value, _mv8: &MiniV8) -> Result<Duration> {
-        match value {
-            Value::Date(timestamp) => {
-                let secs = timestamp / 1000.0;
-                let nanos = ((secs - secs.floor()) * 1_000_000.0).round() as u32;
-                Ok(Duration::new(secs as u64, nanos))
-            }
-            value => Err(Error::from_js_conversion(value.type_name(), "Duration")),
-        }
+impl ToValue for f64 {
+    fn to_value(self, _mv8: &MiniV8) -> Result<Value> {
+        Ok(Value::Number(self as f64))
     }
 }
 
@@ -1030,103 +969,6 @@ impl FromValues for () {
         Ok(())
     }
 }
-
-macro_rules! impl_tuple {
-    ($($name:ident),*) => (
-        impl<$($name),*> ToValues for ($($name,)*)
-        where
-            $($name: ToValue,)*
-        {
-            #[allow(non_snake_case)]
-            fn to_values(self, mv8: &MiniV8) -> Result<Values> {
-                let ($($name,)*) = self;
-                let reservation = $({ let _ = &$name; 1 } +)* 0;
-                let mut results = Vec::with_capacity(reservation);
-                $(results.push($name.to_value(mv8)?);)*
-                Ok(Values::from_vec(results))
-            }
-        }
-
-        impl<$($name),*> FromValues for ($($name,)*)
-        where
-            $($name: FromValue,)*
-        {
-            #[allow(non_snake_case, unused_mut, unused_variables)]
-            fn from_values(values: Values, mv8: &MiniV8) -> Result<Self> {
-                let mut iter = values.into_vec().into_iter();
-                Ok(($({
-                    let $name = ();
-                    FromValue::from_value(iter.next().unwrap_or(Value::Undefined), mv8)?
-                },)*))
-            }
-        }
-
-        impl<$($name,)* VAR> ToValues for ($($name,)* Variadic<VAR>)
-        where
-            $($name: ToValue,)*
-            VAR: ToValue,
-        {
-            #[allow(non_snake_case)]
-            fn to_values(self, mv8: &MiniV8) -> Result<Values> {
-                let ($($name,)* variadic) = self;
-                let reservation = $({ let _ = &$name; 1 } +)* 1;
-                let mut results = Vec::with_capacity(reservation);
-                $(results.push($name.to_value(mv8)?);)*
-                if results.is_empty() {
-                    Ok(variadic.to_values(mv8)?)
-                } else {
-                    results.append(&mut variadic.to_values(mv8)?.into_vec());
-                    Ok(Values::from_vec(results))
-                }
-            }
-        }
-
-        impl<$($name,)* VAR> FromValues for ($($name,)* Variadic<VAR>)
-        where
-            $($name: FromValue,)*
-            VAR: FromValue,
-        {
-            #[allow(non_snake_case, unused_mut, unused_variables)]
-            fn from_values(values: Values, mv8: &MiniV8) -> Result<Self> {
-                let mut values = values.into_vec();
-                let len = values.len();
-                let split = $({ let $name = (); 1 } +)* 0;
-
-                if len < split {
-                    values.reserve(split - len);
-                    for _ in len..split {
-                        values.push(Value::Undefined);
-                    }
-                }
-
-                let last_values = Values::from_vec(values.split_off(split));
-                let variadic = FromValues::from_values(last_values, mv8)?;
-
-                let mut iter = values.into_iter();
-                let ($($name,)*) = ($({ let $name = (); iter.next().unwrap() },)*);
-
-                Ok(($(FromValue::from_value($name, mv8)?,)* variadic))
-            }
-        }
-    )
-}
-
-impl_tuple!(A);
-impl_tuple!(A, B);
-impl_tuple!(A, B, C);
-impl_tuple!(A, B, C, D);
-impl_tuple!(A, B, C, D, E);
-impl_tuple!(A, B, C, D, E, F);
-impl_tuple!(A, B, C, D, E, F, G);
-impl_tuple!(A, B, C, D, E, F, G, H);
-impl_tuple!(A, B, C, D, E, F, G, H, I);
-impl_tuple!(A, B, C, D, E, F, G, H, I, J);
-impl_tuple!(A, B, C, D, E, F, G, H, I, J, K);
-impl_tuple!(A, B, C, D, E, F, G, H, I, J, K, L);
-impl_tuple!(A, B, C, D, E, F, G, H, I, J, K, L, M);
-impl_tuple!(A, B, C, D, E, F, G, H, I, J, K, L, M, N);
-impl_tuple!(A, B, C, D, E, F, G, H, I, J, K, L, M, N, O);
-impl_tuple!(A, B, C, D, E, F, G, H, I, J, K, L, M, N, O, P);
 
 #[derive(Clone)]
 pub(crate) struct Object {
