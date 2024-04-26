@@ -14,13 +14,13 @@ mod mini_v8;
 
 fn convert_error(e: mini_v8::Error, engine: &mini_v8::MiniV8) -> Error {
     match e {
-        mini_v8::Error::ToJsConversionError { .. }
-        | mini_v8::Error::FromJsConversionError { .. } => Error::JsValueError(format!("{e}")),
+        mini_v8::Error::FromJsConversionError { .. } => Error::JsValueError(format!("{e}")),
         // e.to_value(engine).coerce_string(&self.0)?
         _ => Error::JsExecError({
             let formatted = format!("{e}");
             e.to_value(engine)
-                .coerce_string(engine).map(|s| s.to_string())
+                .coerce_string(engine)
+                .map(|s| s.to_string())
                 .unwrap_or(formatted)
         }),
     }
@@ -118,8 +118,7 @@ pub struct Value<'a> {
 
 impl<'a> JsValue<'a> for Value<'a> {
     fn into_string(self) -> Result<String> {
-        String::from_value(self.value, self.engine)
-            .map_err(|e| convert_error(e, self.engine))
+        String::from_value(self.value, self.engine).map_err(|e| convert_error(e, self.engine))
     }
 }
 

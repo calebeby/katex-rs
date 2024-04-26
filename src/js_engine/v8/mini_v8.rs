@@ -6,7 +6,7 @@ use std::fmt;
 use std::hash::{BuildHasher, Hash};
 use std::iter::FromIterator;
 use std::marker::PhantomData;
-use std::ops::{Deref, DerefMut};
+use std::ops::Deref;
 use std::rc::Rc;
 use std::result::Result as StdResult;
 use std::slice;
@@ -91,36 +91,6 @@ impl MiniV8 {
         })
     }
 
-    /// Inserts any sort of keyed value of type `T` into the `MiniV8`, typically for later retrieval
-    /// from within Rust functions called from within JavaScript. If a value already exists with the
-    /// key, it is returned.
-    fn set_user_data<K, T>(&self, key: K, data: T) -> Option<Box<dyn Any>>
-    where
-        K: ToString,
-        T: Any,
-    {
-        self.interface
-            .use_slot(|m: &AnyMap| m.0.borrow_mut().insert(key.to_string(), Box::new(data)))
-    }
-
-    /// Calls a function with a user data value by its key, or `None` if no value exists with the
-    /// key. If a value exists but it is not of the type `T`, `None` is returned. This is typically
-    /// used by a Rust function called from within JavaScript.
-    fn use_user_data<F, T: Any, U>(&self, key: &str, func: F) -> U
-    where
-        F: FnOnce(Option<&T>) -> U + 'static,
-    {
-        self.interface
-            .use_slot(|m: &AnyMap| func(m.0.borrow().get(key).and_then(|d| d.downcast_ref::<T>())))
-    }
-
-    /// Removes and returns a user data value by its key. Returns `None` if no value exists with the
-    /// key.
-    fn remove_user_data(&self, key: &str) -> Option<Box<dyn Any>> {
-        self.interface
-            .use_slot(|m: &AnyMap| m.0.borrow_mut().remove(key))
-    }
-
     /// Creates and returns a string managed by V8.
     ///
     /// # Panics
@@ -155,127 +125,6 @@ impl MiniV8 {
                 mv8: self.clone(),
                 handle: v8::Global::new(scope, object),
             }
-        })
-    }
-
-    /// Creates and returns an `Object` managed by V8 filled with the keys and values from an
-    /// iterator. Keys are coerced to object properties.
-    ///
-    /// This is a thin wrapper around `MiniV8::create_object` and `Object::set`. See `Object::set`
-    /// for how this method might return an error.
-    fn create_object_from<K, V, I>(&self, iter: I) -> Result<Object>
-    where
-        K: ToValue,
-        V: ToValue,
-        I: IntoIterator<Item = (K, V)>,
-    {
-        let object = self.create_object();
-        for (k, v) in iter {
-            object.set(k, v)?;
-        }
-        Ok(object)
-    }
-
-    /// Wraps a Rust function or closure, creating a callable JavaScript function handle to it.
-    ///
-    /// The function's return value is always a `Result`: If the function returns `Err`, the error
-    /// is raised as a JavaScript exception, which can be caught within JavaScript or bubbled up
-    /// back into Rust by not catching it. This allows using the `?` operator to propagate errors
-    /// through intermediate JavaScript code.
-    ///
-    /// If the function returns `Ok`, the contained value will be converted to a JavaScript value.
-    /// For details on Rust-to-JavaScript conversions, refer to the `ToValue` and `ToValues` traits.
-    ///
-    /// If the provided function panics, the executable will be aborted.
-    fn create_function<F, R>(&self, func: F) -> Function
-    where
-        F: Fn(Invocation) -> Result<R> + 'static,
-        R: ToValue,
-    {
-        let func = move |mv8: &MiniV8, this: Value, args: Values| {
-            func(Invocation {
-                mv8: mv8.clone(),
-                this,
-                args,
-            })?
-            .to_value(mv8)
-        };
-
-        self.scope(|scope| {
-            let callback = Box::new(func);
-            let callback_info = CallbackInfo {
-                mv8: self.clone(),
-                callback,
-            };
-            let ptr = Box::into_raw(Box::new(callback_info));
-            let ext = v8::External::new(scope, ptr as _);
-
-            let v8_func = |scope: &mut v8::HandleScope,
-                           fca: v8::FunctionCallbackArguments,
-                           mut rv: v8::ReturnValue| {
-                let data = fca.data();
-                let ext = v8::Local::<v8::External>::try_from(data).unwrap();
-                let callback_info_ptr = ext.value() as *mut CallbackInfo;
-                let callback_info = unsafe { &mut *callback_info_ptr };
-                let CallbackInfo { mv8, callback } = callback_info;
-                let ptr = scope as *mut v8::HandleScope;
-                // We can erase the lifetime of the `v8::HandleScope` safely because it only lives
-                // on the interface stack during the current block:
-                let ptr: *mut v8::HandleScope<'static> = unsafe { std::mem::transmute(ptr) };
-                mv8.interface.push(ptr);
-                let this = Value::from_v8_value(mv8, scope, fca.this().into());
-                let len = fca.length();
-                let mut args = Vec::with_capacity(len as usize);
-                for i in 0..len {
-                    args.push(Value::from_v8_value(mv8, scope, fca.get(i)));
-                }
-                match callback(mv8, this, Values::from_vec(args)) {
-                    Ok(v) => {
-                        rv.set(v.to_v8_value(scope));
-                    }
-                    Err(e) => {
-                        let exception = e.to_value(mv8).to_v8_value(scope);
-                        scope.throw_exception(exception);
-                    }
-                };
-                mv8.interface.pop();
-            };
-
-            let value = v8::Function::builder(v8_func)
-                .data(ext.into())
-                .build(scope)
-                .unwrap();
-            // TODO: `v8::Isolate::adjust_amount_of_external_allocated_memory` should be called
-            // appropriately with the following external resource size calculation. This cannot be
-            // done as of now, since `v8::Weak::with_guaranteed_finalizer` does not provide a
-            // `v8::Isolate` to the finalizer callback, and so the downward adjustment cannot be
-            // made.
-            //
-            // let func_size = mem::size_of_val(&func); let ext_size = func_size +
-            // mem::size_of::<CallbackInfo>;
-            let drop_ext = Box::new(move || drop(unsafe { Box::from_raw(ptr) }));
-            add_finalizer(scope, value, drop_ext);
-            Function {
-                mv8: self.clone(),
-                handle: v8::Global::new(scope, value),
-            }
-        })
-    }
-
-    /// Wraps a mutable Rust closure, creating a callable JavaScript function handle to it.
-    ///
-    /// This is a version of `create_function` that accepts a FnMut argument. Refer to
-    /// `create_function` for more information about the implementation.
-    fn create_function_mut<F, R>(&self, func: F) -> Function
-    where
-        F: FnMut(Invocation) -> Result<R> + 'static,
-        R: ToValue,
-    {
-        let func = RefCell::new(func);
-        self.create_function(move |invocation| {
-            (*func
-                .try_borrow_mut()
-                .map_err(|_| Error::RecursiveMutCallback)?)(invocation)
         })
     }
 
@@ -342,25 +191,6 @@ impl Interface {
         ))])))
     }
 
-    fn push(&self, handle_scope: *mut v8::HandleScope<'static>) {
-        self.0
-            .borrow_mut()
-            .push(Rc::new(RefCell::new(InterfaceEntry::HandleScope(
-                handle_scope,
-            ))));
-    }
-
-    fn pop(&self) {
-        self.0.borrow_mut().pop();
-    }
-
-    fn use_slot<F, T: 'static, U>(&self, func: F) -> U
-    where
-        F: FnOnce(&T) -> U,
-    {
-        self.top(|entry| func(entry.get_slot()))
-    }
-
     fn top<F, T>(&self, func: F) -> T
     where
         F: FnOnce(&mut InterfaceEntry) -> T,
@@ -373,7 +203,6 @@ impl Interface {
 
 enum InterfaceEntry {
     Isolate(v8::OwnedIsolate),
-    HandleScope(*mut v8::HandleScope<'static>),
 }
 
 impl InterfaceEntry {
@@ -389,31 +218,12 @@ impl InterfaceEntry {
                 let scope = &mut v8::ContextScope::new(scope, context);
                 func(scope)
             }
-            InterfaceEntry::HandleScope(ref ptr) => {
-                let scope: &mut v8::HandleScope = unsafe { &mut **ptr };
-                let scope = &mut v8::ContextScope::new(scope, scope.get_current_context());
-                func(scope)
-            }
-        }
-    }
-
-    fn get_slot<T: 'static>(&self) -> &T {
-        match self {
-            InterfaceEntry::Isolate(isolate) => isolate.get_slot::<T>().unwrap(),
-            InterfaceEntry::HandleScope(ref ptr) => {
-                let scope: &mut v8::HandleScope = unsafe { &mut **ptr };
-                scope.get_slot::<T>().unwrap()
-            }
         }
     }
 
     fn isolate_handle(&self) -> v8::IsolateHandle {
         match self {
             InterfaceEntry::Isolate(isolate) => isolate.thread_safe_handle(),
-            InterfaceEntry::HandleScope(ref ptr) => {
-                let scope: &mut v8::HandleScope = unsafe { &mut **ptr };
-                scope.thread_safe_handle()
-            }
         }
     }
 }
@@ -447,39 +257,11 @@ fn create_string<'s>(scope: &mut v8::HandleScope<'s>, value: &str) -> v8::Local<
     v8::String::new(scope, value).expect("string exceeds maximum length")
 }
 
-fn add_finalizer<T: 'static>(
-    isolate: &mut v8::Isolate,
-    handle: impl v8::Handle<Data = T>,
-    finalizer: impl FnOnce() + 'static,
-) {
-    let rc = Rc::new(RefCell::new(None));
-    let weak = v8::Weak::with_guaranteed_finalizer(
-        isolate,
-        handle,
-        Box::new({
-            let rc = rc.clone();
-            move || {
-                let weak = rc.replace(None).unwrap();
-                finalizer();
-                drop(weak);
-            }
-        }),
-    );
-    rc.replace(Some(weak));
-}
-
-type Callback = Box<dyn Fn(&MiniV8, Value, Values) -> Result<Value>>;
-
-struct CallbackInfo {
-    mv8: MiniV8,
-    callback: Callback,
-}
-
 struct AnyMap(Rc<RefCell<BTreeMap<StdString, Box<dyn Any>>>>);
 
 // A JavaScript script.
 #[derive(Clone, Debug, Default)]
-struct Script {
+pub(crate) struct Script {
     /// The source of the script.
     source: StdString,
     /// The maximum runtime duration of the script's execution. This cannot be set within a nested
@@ -576,168 +358,6 @@ pub(crate) enum Value {
 }
 
 impl Value {
-    /// Returns `true` if this is a `Value::Undefined`, `false` otherwise.
-    fn is_undefined(&self) -> bool {
-        if let Value::Undefined = *self {
-            true
-        } else {
-            false
-        }
-    }
-
-    /// Returns `true` if this is a `Value::Null`, `false` otherwise.
-    fn is_null(&self) -> bool {
-        if let Value::Null = *self {
-            true
-        } else {
-            false
-        }
-    }
-
-    /// Returns `true` if this is a `Value::Boolean`, `false` otherwise.
-    fn is_boolean(&self) -> bool {
-        if let Value::Boolean(_) = *self {
-            true
-        } else {
-            false
-        }
-    }
-
-    /// Returns `true` if this is a `Value::Number`, `false` otherwise.
-    fn is_number(&self) -> bool {
-        if let Value::Number(_) = *self {
-            true
-        } else {
-            false
-        }
-    }
-
-    /// Returns `true` if this is a `Value::Date`, `false` otherwise.
-    fn is_date(&self) -> bool {
-        if let Value::Date(_) = *self {
-            true
-        } else {
-            false
-        }
-    }
-
-    /// Returns `true` if this is a `Value::String`, `false` otherwise.
-    fn is_string(&self) -> bool {
-        if let Value::String(_) = *self {
-            true
-        } else {
-            false
-        }
-    }
-
-    /// Returns `true` if this is a `Value::Array`, `false` otherwise.
-    fn is_array(&self) -> bool {
-        if let Value::Array(_) = *self {
-            true
-        } else {
-            false
-        }
-    }
-
-    /// Returns `true` if this is a `Value::Function`, `false` otherwise.
-    fn is_function(&self) -> bool {
-        if let Value::Function(_) = *self {
-            true
-        } else {
-            false
-        }
-    }
-
-    /// Returns `true` if this is a `Value::Object`, `false` otherwise.
-    fn is_object(&self) -> bool {
-        if let Value::Object(_) = *self {
-            true
-        } else {
-            false
-        }
-    }
-
-    /// Returns `Some(())` if this is a `Value::Undefined`, `None` otherwise.
-    fn as_undefined(&self) -> Option<()> {
-        if let Value::Undefined = *self {
-            Some(())
-        } else {
-            None
-        }
-    }
-
-    /// Returns `Some(())` if this is a `Value::Null`, `None` otherwise.
-    fn as_null(&self) -> Option<()> {
-        if let Value::Undefined = *self {
-            Some(())
-        } else {
-            None
-        }
-    }
-
-    /// Returns `Some` if this is a `Value::Boolean`, `None` otherwise.
-    fn as_boolean(&self) -> Option<bool> {
-        if let Value::Boolean(value) = *self {
-            Some(value)
-        } else {
-            None
-        }
-    }
-
-    /// Returns `Some` if this is a `Value::Number`, `None` otherwise.
-    fn as_number(&self) -> Option<f64> {
-        if let Value::Number(value) = *self {
-            Some(value)
-        } else {
-            None
-        }
-    }
-
-    /// Returns `Some` if this is a `Value::Date`, `None` otherwise.
-    fn as_date(&self) -> Option<f64> {
-        if let Value::Date(value) = *self {
-            Some(value)
-        } else {
-            None
-        }
-    }
-
-    /// Returns `Some` if this is a `Value::String`, `None` otherwise.
-    fn as_string(&self) -> Option<&String> {
-        if let Value::String(ref value) = *self {
-            Some(value)
-        } else {
-            None
-        }
-    }
-
-    /// Returns `Some` if this is a `Value::Array`, `None` otherwise.
-    fn as_array(&self) -> Option<&Array> {
-        if let Value::Array(ref value) = *self {
-            Some(value)
-        } else {
-            None
-        }
-    }
-
-    /// Returns `Some` if this is a `Value::Function`, `None` otherwise.
-    fn as_function(&self) -> Option<&Function> {
-        if let Value::Function(ref value) = *self {
-            Some(value)
-        } else {
-            None
-        }
-    }
-
-    /// Returns `Some` if this is a `Value::Object`, `None` otherwise.
-    fn as_object(&self) -> Option<&Object> {
-        if let Value::Object(ref value) = *self {
-            Some(value)
-        } else {
-            None
-        }
-    }
-
     /// A wrapper around `FromValue::from_value`.
     fn into<T: FromValue>(self, mv8: &MiniV8) -> Result<T> {
         T::from_value(self, mv8)
@@ -907,35 +527,6 @@ impl Values {
     fn into_vec(self) -> Vec<Value> {
         self.0
     }
-
-    fn get(&self, index: usize) -> Value {
-        self.0
-            .get(index)
-            .map(Clone::clone)
-            .unwrap_or(Value::Undefined)
-    }
-
-    fn from<T: FromValue>(&self, mv8: &MiniV8, index: usize) -> Result<T> {
-        T::from_value(
-            self.0
-                .get(index)
-                .map(Clone::clone)
-                .unwrap_or(Value::Undefined),
-            mv8,
-        )
-    }
-
-    fn into<T: FromValues>(self, mv8: &MiniV8) -> Result<T> {
-        T::from_values(self, mv8)
-    }
-
-    fn len(&self) -> usize {
-        self.0.len()
-    }
-
-    fn iter(&self) -> impl Iterator<Item = &'_ Value> {
-        self.0.iter()
-    }
 }
 
 impl FromIterator<Value> for Values {
@@ -966,7 +557,7 @@ impl<'a> IntoIterator for &'a Values {
 ///
 /// This is a generalization of `ToValue`, allowing any number of resulting JavaScript values
 /// instead of just one. Any type that implements `ToValue` will automatically implement this trait.
-trait ToValues {
+pub(crate) trait ToValues {
     /// Performs the conversion.
     fn to_values(self, mv8: &MiniV8) -> Result<Values>;
 }
@@ -994,47 +585,11 @@ trait FromValues: Sized {
 #[derive(Clone)]
 struct Variadic<T>(Vec<T>);
 
-impl<T> Variadic<T> {
-    /// Creates an empty `Variadic` wrapper containing no values.
-    fn new() -> Variadic<T> {
-        Variadic(Vec::new())
-    }
-
-    fn from_vec(vec: Vec<T>) -> Variadic<T> {
-        Variadic(vec)
-    }
-
-    fn into_vec(self) -> Vec<T> {
-        self.0
-    }
-}
-
-impl<T> FromIterator<T> for Variadic<T> {
-    fn from_iter<I: IntoIterator<Item = T>>(iter: I) -> Self {
-        Variadic(Vec::from_iter(iter))
-    }
-}
-
-impl<T> IntoIterator for Variadic<T> {
-    type Item = T;
-    type IntoIter = <Vec<T> as IntoIterator>::IntoIter;
-
-    fn into_iter(self) -> Self::IntoIter {
-        self.0.into_iter()
-    }
-}
-
 impl<T> Deref for Variadic<T> {
     type Target = Vec<T>;
 
     fn deref(&self) -> &Self::Target {
         &self.0
-    }
-}
-
-impl<T> DerefMut for Variadic<T> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
     }
 }
 
@@ -1044,13 +599,6 @@ type Result<T> = StdResult<T, Error>;
 /// An error originating from `MiniV8` usage.
 #[derive(Debug)]
 pub(crate) enum Error {
-    /// A Rust value could not be converted to a JavaScript value.
-    ToJsConversionError {
-        /// Name of the Rust type that could not be converted.
-        from: &'static str,
-        /// Name of the JavaScript type that could not be created.
-        to: &'static str,
-    },
     /// A JavaScript value could not be converted to the expected Rust type.
     FromJsConversionError {
         /// Name of the JavaScript type that could not be converted.
@@ -1060,17 +608,8 @@ pub(crate) enum Error {
     },
     /// An evaluation timeout occurred.
     Timeout,
-    /// A mutable callback has triggered JavaScript code that has called the same mutable callback
-    /// again.
-    ///
-    /// This is an error because a mutable callback can only be borrowed mutably once.
-    RecursiveMutCallback,
     /// An evaluation timeout was specified from within a Rust function embedded in V8.
     InvalidTimeout,
-    /// A custom error that occurs during runtime.
-    ///
-    /// This can be used for returning user-defined errors from callbacks.
-    ExternalError(Box<dyn StdError + 'static>),
     /// An exception that occurred within the JavaScript environment.
     Value(Value),
 }
@@ -1080,7 +619,7 @@ impl Error {
     pub(crate) fn to_value(self, mv8: &MiniV8) -> Value {
         match self {
             Error::Value(value) => value,
-            Error::ToJsConversionError { .. } | Error::FromJsConversionError { .. } => {
+            Error::FromJsConversionError { .. } => {
                 let object = mv8.create_object();
                 let _ = object.set("name", "TypeError");
                 let _ = object.set("message", self.to_string());
@@ -1109,16 +648,11 @@ impl StdError for Error {
 impl fmt::Display for Error {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            Error::ToJsConversionError { from, to } => {
-                write!(fmt, "error converting {} to JavaScript {}", from, to)
-            }
             Error::FromJsConversionError { from, to } => {
                 write!(fmt, "error converting JavaScript {} to {}", from, to)
             }
             Error::Timeout => write!(fmt, "evaluation timed out"),
-            Error::RecursiveMutCallback => write!(fmt, "mutable callback called recursively"),
             Error::InvalidTimeout => write!(fmt, "invalid request for evaluation timeout"),
-            Error::ExternalError(ref err) => err.fmt(fmt),
             Error::Value(v) => write!(fmt, "JavaScript runtime error ({})", v.type_name()),
         }
     }
@@ -1131,17 +665,6 @@ pub(crate) struct Function {
 }
 
 impl Function {
-    /// Consumes the function and downgrades it to a JavaScript object.
-    fn into_object(self) -> Object {
-        self.mv8.clone().scope(|scope| {
-            let object: v8::Local<v8::Object> = v8::Local::new(scope, self.handle.clone()).into();
-            Object {
-                mv8: self.mv8,
-                handle: v8::Global::new(scope, object),
-            }
-        })
-    }
-
     /// Calls the function with the given arguments, with `this` set to `undefined`.
     pub(crate) fn call<A, R>(&self, args: A) -> Result<R>
     where
@@ -1172,46 +695,12 @@ impl Function {
             })
             .and_then(|v| v.into(&self.mv8))
     }
-
-    /// Calls the function as a constructor function with the given arguments.
-    fn call_new<A, R>(&self, args: A) -> Result<R>
-    where
-        A: ToValues,
-        R: FromValue,
-    {
-        let args = args.to_values(&self.mv8)?;
-        self.mv8
-            .try_catch(|scope| {
-                let function = v8::Local::new(scope, self.handle.clone());
-                let args = args.into_vec();
-                let args_v8: Vec<_> = args.into_iter().map(|v| v.to_v8_value(scope)).collect();
-                let result = function.new_instance(scope, &args_v8);
-                self.mv8.exception(scope)?;
-                Ok(Value::from_v8_value(
-                    &self.mv8,
-                    scope,
-                    result.unwrap().into(),
-                ))
-            })
-            .and_then(|v| v.into(&self.mv8))
-    }
 }
 
 impl fmt::Debug for Function {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "<function>")
     }
-}
-
-/// A bundle of information about an invocation of a function that has been embedded from Rust into
-/// JavaScript.
-struct Invocation {
-    /// The `MiniV8` within which the function was called.
-    mv8: MiniV8,
-    /// The value of the function invocation's `this` binding.
-    this: Value,
-    /// The list of arguments with which the function was called.
-    args: Values,
 }
 
 #[derive(Clone)]
@@ -1680,48 +1169,6 @@ impl Object {
         })
     }
 
-    /// Removes the property associated with the given key from the object. This function does
-    /// nothing if the property does not exist.
-    ///
-    /// Returns an error if `ToValue::to_value` fails for the key or if the key value could not be
-    /// cast to a property key string.
-    fn remove<K: ToValue>(&self, key: K) -> Result<()> {
-        let key = key.to_value(&self.mv8)?;
-        self.mv8.try_catch(|scope| {
-            let object = v8::Local::new(scope, self.handle.clone());
-            let key = key.to_v8_value(scope);
-            object.delete(scope, key);
-            self.mv8.exception(scope)
-        })
-    }
-
-    /// Returns `true` if the given key is a property of the object, `false` otherwise.
-    ///
-    /// Returns an error if `ToValue::to_value` fails for the key or if the key value could not be
-    /// cast to a property key string.
-    fn has<K: ToValue>(&self, key: K) -> Result<bool> {
-        let key = key.to_value(&self.mv8)?;
-        self.mv8.try_catch(|scope| {
-            let object = v8::Local::new(scope, self.handle.clone());
-            let key = key.to_v8_value(scope);
-            let has = object.has(scope, key);
-            self.mv8.exception(scope)?;
-            Ok(has.unwrap())
-        })
-    }
-
-    /// Calls the function at the key with the given arguments, with `this` set to the object.
-    /// Returns an error if the value at the key is not a function.
-    fn call_prop<K, A, R>(&self, key: K, args: A) -> Result<R>
-    where
-        K: ToValue,
-        A: ToValues,
-        R: FromValue,
-    {
-        let func: Function = self.get(key)?;
-        func.call_method(self.clone(), args)
-    }
-
     /// Returns an array containing all of this object's enumerable property keys. If
     /// `include_inherited` is `false`, then only the object's own enumerable properties will be
     /// collected (similar to `Object.getOwnPropertyNames` in Javascript). If `include_inherited` is
@@ -1841,23 +1288,12 @@ where
 }
 
 #[derive(Clone)]
-struct Array {
+pub(crate) struct Array {
     mv8: MiniV8,
     handle: v8::Global<v8::Array>,
 }
 
 impl Array {
-    /// Consumes the array and downgrades it to a JavaScript object.
-    fn into_object(self) -> Object {
-        self.mv8.clone().scope(|scope| {
-            let object: v8::Local<v8::Object> = v8::Local::new(scope, self.handle.clone()).into();
-            Object {
-                mv8: self.mv8,
-                handle: v8::Global::new(scope, object),
-            }
-        })
-    }
-
     /// Get the value using the given array index. Returns `Value::Undefined` if no element at the
     /// index exists.
     ///
