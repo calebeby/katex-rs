@@ -20,7 +20,7 @@ fn convert_error(e: mini_v8::Error, engine: &mini_v8::MiniV8) -> Error {
             let formatted = format!("{e}");
             e.to_value(engine)
                 .coerce_string(engine)
-                .map(|s| s.to_string())
+                .map(|s| s.to_rust_string())
                 .unwrap_or(formatted)
         }),
     }

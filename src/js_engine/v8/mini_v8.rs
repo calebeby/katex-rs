@@ -711,7 +711,7 @@ pub(crate) struct String {
 
 impl String {
     /// Returns a Rust string converted from the V8 string.
-    pub(crate) fn to_string(&self) -> StdString {
+    pub(crate) fn to_rust_string(&self) -> StdString {
         self.mv8
             .scope(|scope| v8::Local::new(scope, self.handle.clone()).to_rust_string_lossy(scope))
     }
@@ -719,7 +719,7 @@ impl String {
 
 impl fmt::Debug for String {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{:?}", self.to_string())
+        write!(f, "{:?}", self.to_rust_string())
     }
 }
 
@@ -928,7 +928,7 @@ impl ToValue for StdString {
 
 impl FromValue for StdString {
     fn from_value(value: Value, mv8: &MiniV8) -> Result<Self> {
-        Ok(value.coerce_string(mv8)?.to_string())
+        Ok(value.coerce_string(mv8)?.to_rust_string())
     }
 }
 
