@@ -1,9 +1,6 @@
-use std::any::Any;
 use std::cell::RefCell;
-use std::collections::BTreeMap;
 use std::fmt;
 use std::iter::FromIterator;
-use std::ops::Deref;
 use std::rc::Rc;
 use std::result::Result as StdResult;
 use std::string::String as StdString;
@@ -235,14 +232,11 @@ fn initialize_slots(isolate: &mut v8::Isolate) {
     scope.set_slot(Global {
         context: global_context,
     });
-    scope.set_slot(AnyMap(Rc::new(RefCell::new(BTreeMap::new()))));
 }
 
 fn create_string<'s>(scope: &mut v8::HandleScope<'s>, value: &str) -> v8::Local<'s, v8::String> {
     v8::String::new(scope, value).expect("string exceeds maximum length")
 }
-
-struct AnyMap(Rc<RefCell<BTreeMap<StdString, Box<dyn Any>>>>);
 
 // A JavaScript script.
 #[derive(Clone, Debug, Default)]
@@ -495,23 +489,6 @@ trait FromValues: Sized {
     fn from_values(values: Values, mv8: &MiniV8) -> Result<Self>;
 }
 
-/// Wraps a variable number of `T`s.
-///
-/// Can be used to work with variadic functions more easily. Using this type as the last argument of
-/// a Rust callback will accept any number of arguments from JavaScript and convert them to the type
-/// `T` using [`FromValue`]. `Variadic<T>` can also be returned from a callback, returning a
-/// variable number of values to JavaScript.
-#[derive(Clone)]
-struct Variadic<T>(Vec<T>);
-
-impl<T> Deref for Variadic<T> {
-    type Target = Vec<T>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
 /// `std::result::Result` specialized for this crate's `Error` type.
 type Result<T> = StdResult<T, Error>;
 
@@ -584,17 +561,7 @@ impl Function {
         A: ToValues,
         R: FromValue,
     {
-        self.call_method(Value::Undefined, args)
-    }
-
-    /// Calls the function with the given `this` and arguments.
-    fn call_method<T, A, R>(&self, this: T, args: A) -> Result<R>
-    where
-        T: ToValue,
-        A: ToValues,
-        R: FromValue,
-    {
-        let this = this.to_value(&self.mv8)?;
+        let this = Value::Undefined;
         let args = args.to_values(&self.mv8)?;
         self.mv8
             .try_catch(|scope| {
