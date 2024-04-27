@@ -1,8 +1,9 @@
+use crate::Error;
+use crate::Result;
 use std::cell::RefCell;
 use std::fmt;
 use std::iter::FromIterator;
 use std::rc::Rc;
-use std::result::Result as StdResult;
 use std::string::String as StdString;
 use std::sync::Once;
 use std::vec;
@@ -106,9 +107,11 @@ impl MiniV8 {
 
     fn exception(&self, scope: &mut v8::TryCatch<v8::HandleScope>) -> Result<()> {
         if scope.has_terminated() {
-            Err(Error::Timeout)
+            Err(Error::JsExecError(
+                "The scope was already terminated".to_owned(),
+            ))
         } else if let Some(exception) = scope.exception() {
-            Err(Error::Value(Value::from_v8_value(self, scope, exception)))
+            Err(Error::JsExecError(exception.to_rust_string_lossy(scope)))
         } else {
             Ok(())
         }
@@ -244,17 +247,6 @@ impl Value {
         }
     }
 
-    fn type_name(&self) -> &'static str {
-        match *self {
-            Value::Undefined => "undefined",
-            Value::Null => "null",
-            Value::Boolean(_) => "boolean",
-            Value::Number(_) => "number",
-            Value::Object(_) => "object",
-            Value::String(_) => "string",
-        }
-    }
-
     fn from_v8_value(
         mv8: &MiniV8,
         scope: &mut v8::HandleScope,
@@ -367,42 +359,6 @@ trait FromValues: Sized {
     /// values should be ignored. Similarly, if not enough values are given, conversions should
     /// assume that any missing values are undefined.
     fn from_values(values: Values, mv8: &MiniV8) -> Result<Self>;
-}
-
-/// `std::result::Result` specialized for this crate's `Error` type.
-type Result<T> = StdResult<T, Error>;
-
-/// An error originating from `MiniV8` usage.
-#[derive(Debug)]
-pub(crate) enum Error {
-    /// An evaluation timeout occurred.
-    Timeout,
-    /// An exception that occurred within the JavaScript environment.
-    Value(Value),
-}
-
-impl Error {
-    /// Normalizes an error into a JavaScript value.
-    pub(crate) fn to_value(self, mv8: &MiniV8) -> Value {
-        match self {
-            Error::Value(value) => value,
-            _ => {
-                let object = mv8.create_object();
-                let _ = object.set("name", "Error");
-                let _ = object.set("message", self.to_string());
-                Value::Object(object)
-            }
-        }
-    }
-}
-
-impl fmt::Display for Error {
-    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            Error::Timeout => write!(fmt, "evaluation timed out"),
-            Error::Value(v) => write!(fmt, "JavaScript runtime error ({})", v.type_name()),
-        }
-    }
 }
 
 #[derive(Clone)]
