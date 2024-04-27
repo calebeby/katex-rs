@@ -38,14 +38,16 @@ impl MiniV8 {
             let key = key.to_v8_value(scope);
             let result: v8::Local<'_, v8::Value> = object.get(scope, key).unwrap();
             let function: v8::Local<'_, v8::Function> = result.try_into().unwrap();
-            self.exception(scope)?;
             let this = Value::Undefined;
             let this = this.to_v8_value(scope);
             let args = args.into_vec();
             let args_v8: Vec<_> = args.into_iter().map(|v| v.to_v8_value(scope)).collect();
-            let result = function.call(scope, this, &args_v8);
-            self.exception(scope)?;
-            Ok(Value::from_v8_value(self, scope, result.unwrap()))
+            let result = function
+                .call(scope, this, &args_v8)
+                .ok_or(Error::JsExecError(
+                    "Function call did not return a result".to_string(),
+                ))?;
+            Ok(Value::from_v8_value(self, scope, result))
         })
     }
 
@@ -54,9 +56,7 @@ impl MiniV8 {
         self.try_catch(|scope| {
             let source = create_string(scope, script);
             let script = v8::Script::compile(scope, source, None);
-            self.exception(scope)?;
             let result = script.unwrap().run(scope);
-            self.exception(scope)?;
             Ok(Value::from_v8_value(self, scope, result.unwrap()))
         })
     }
@@ -96,25 +96,13 @@ impl MiniV8 {
         self.interface.scope(func)
     }
 
-    // Opens a new try-catch scope in the global context. Nesting calls to this or `MiniV8::scope`
-    // will cause a panic.
-    fn try_catch<F, T>(&self, func: F) -> T
+    // Opens a new try-catch scope in the global context.
+    // Nesting calls to this or `MiniV8::scope` will cause a panic.
+    fn try_catch<F, T>(&self, func: F) -> Result<T>
     where
-        F: FnOnce(&mut v8::TryCatch<v8::HandleScope>) -> T,
+        F: FnOnce(&mut v8::TryCatch<v8::HandleScope>) -> Result<T>,
     {
         self.interface.try_catch(func)
-    }
-
-    fn exception(&self, scope: &mut v8::TryCatch<v8::HandleScope>) -> Result<()> {
-        if scope.has_terminated() {
-            Err(Error::JsExecError(
-                "The scope was already terminated".to_owned(),
-            ))
-        } else if let Some(exception) = scope.exception() {
-            Err(Error::JsExecError(exception.to_rust_string_lossy(scope)))
-        } else {
-            Ok(())
-        }
     }
 }
 
@@ -131,11 +119,18 @@ impl Interface {
     }
 
     // Opens a new try-catch scope in the global context.
-    fn try_catch<F, T>(&self, func: F) -> T
+    fn try_catch<F, T>(&self, func: F) -> Result<T>
     where
-        F: FnOnce(&mut v8::TryCatch<v8::HandleScope>) -> T,
+        F: FnOnce(&mut v8::TryCatch<v8::HandleScope>) -> Result<T>,
     {
-        self.scope(|scope| func(&mut v8::TryCatch::new(scope)))
+        self.scope(|scope| {
+            let mut try_catch = v8::TryCatch::new(scope);
+            let result = func(&mut try_catch);
+            match try_catch.exception() {
+                Some(val) => Err(Error::JsExecError(val.to_rust_string_lossy(&mut try_catch))),
+                None => Ok(result?),
+            }
+        })
     }
 
     fn new(isolate: v8::OwnedIsolate) -> Interface {
@@ -239,7 +234,7 @@ impl Value {
             Value::String(s) => Ok(s.clone()),
             value => mv8.try_catch(|scope| {
                 let maybe = value.to_v8_value(scope).to_string(scope);
-                mv8.exception(scope).map(|_| String {
+                Ok(String {
                     mv8: mv8.clone(),
                     handle: v8::Global::new(scope, maybe.unwrap()),
                 })
@@ -454,7 +449,6 @@ impl Object {
                 let object = v8::Local::new(scope, self.handle.clone());
                 let key = key.to_v8_value(scope);
                 let result = object.get(scope, key);
-                self.mv8.exception(scope)?;
                 Ok(Value::from_v8_value(&self.mv8, scope, result.unwrap()))
             })
             .and_then(|v| v.into(&self.mv8))
@@ -472,7 +466,7 @@ impl Object {
             let key = key.to_v8_value(scope);
             let value = value.to_v8_value(scope);
             object.set(scope, key, value);
-            self.mv8.exception(scope)
+            Ok(())
         })
     }
 }
@@ -482,13 +476,11 @@ impl fmt::Debug for Object {
         let keys = match self.mv8.try_catch(|scope| -> Result<Vec<String>> {
             let object = v8::Local::new(scope, self.handle.clone());
             let keys = object.get_own_property_names(scope, Default::default());
-            self.mv8.exception(scope)?;
             let keys = keys.unwrap();
             let len = keys.length();
             let keys: Result<Vec<String>> = (0..len)
                 .map(|index| -> Result<String> {
                     let key = keys.get_index(scope, index).unwrap();
-                    self.mv8.exception(scope)?;
                     Value::from_v8_value(&self.mv8, scope, key).coerce_string(&self.mv8)
                 })
                 .collect();
