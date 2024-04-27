@@ -22,14 +22,29 @@ impl MiniV8 {
         }
     }
 
-    /// Returns the global JavaScript object.
-    pub(crate) fn global(&self) -> Object {
-        self.scope(|scope| {
+    pub(crate) fn call_global_function<A>(&self, func_name: StdString, args: A) -> Result<Value>
+    where
+        A: ToValues,
+    {
+        let global = self.scope(|scope| {
             let global = scope.get_current_context().global(scope);
-            Object {
-                mv8: self.clone(),
-                handle: v8::Global::new(scope, global),
-            }
+            v8::Global::new(scope, global)
+        });
+        let key = func_name.to_value(self)?;
+        let args = args.to_values(self)?;
+        self.try_catch(|scope| {
+            let object = v8::Local::new(scope, global);
+            let key = key.to_v8_value(scope);
+            let result: v8::Local<'_, v8::Value> = object.get(scope, key).unwrap();
+            let function: v8::Local<'_, v8::Function> = result.try_into().unwrap();
+            self.exception(scope)?;
+            let this = Value::Undefined;
+            let this = this.to_v8_value(scope);
+            let args = args.into_vec();
+            let args_v8: Vec<_> = args.into_iter().map(|v| v.to_v8_value(scope)).collect();
+            let result = function.call(scope, this, &args_v8);
+            self.exception(scope)?;
+            Ok(Value::from_v8_value(self, scope, result.unwrap()))
         })
     }
 
@@ -72,7 +87,7 @@ impl MiniV8 {
     }
 
     // Opens a new handle scope in the global context. Nesting calls to this or `MiniV8::try_catch`
-    // will cause a panic (unless a callback is entered, see `MiniV8::create_function`).
+    // will cause a panic.
     fn scope<F, T>(&self, func: F) -> T
     where
         F: FnOnce(&mut v8::ContextScope<v8::HandleScope>) -> T,
@@ -81,7 +96,7 @@ impl MiniV8 {
     }
 
     // Opens a new try-catch scope in the global context. Nesting calls to this or `MiniV8::scope`
-    // will cause a panic (unless a callback is entered, see `MiniV8::create_function`).
+    // will cause a panic.
     fn try_catch<F, T>(&self, func: F) -> T
     where
         F: FnOnce(&mut v8::TryCatch<v8::HandleScope>) -> T,
@@ -203,8 +218,6 @@ pub(crate) enum Value {
     Number(f64),
     /// An immutable JavaScript string, managed by V8.
     String(String),
-    /// Reference to a JavaScript function.
-    Function(Function),
     /// Reference to a JavaScript object.
     Object(Object),
 }
@@ -237,7 +250,6 @@ impl Value {
             Value::Null => "null",
             Value::Boolean(_) => "boolean",
             Value::Number(_) => "number",
-            Value::Function(_) => "function",
             Value::Object(_) => "object",
             Value::String(_) => "string",
         }
@@ -265,13 +277,6 @@ impl Value {
                 mv8: mv8.clone(),
                 handle,
             })
-        } else if value.is_function() {
-            let value: v8::Local<v8::Function> = value.try_into().unwrap();
-            let handle = v8::Global::new(scope, value);
-            Value::Function(Function {
-                mv8: mv8.clone(),
-                handle,
-            })
         } else if value.is_object() {
             let value: v8::Local<v8::Object> = value.try_into().unwrap();
             let handle = v8::Global::new(scope, value);
@@ -290,7 +295,6 @@ impl Value {
             Value::Null => v8::null(scope).into(),
             Value::Boolean(v) => v8::Boolean::new(scope, *v).into(),
             Value::Number(v) => v8::Number::new(scope, *v).into(),
-            Value::Function(v) => v8::Local::new(scope, v.handle.clone()).into(),
             Value::Object(v) => v8::Local::new(scope, v.handle.clone()).into(),
             Value::String(v) => v8::Local::new(scope, v.handle.clone()).into(),
         }
@@ -305,7 +309,6 @@ impl fmt::Debug for Value {
             Value::Boolean(b) => write!(f, "{:?}", b),
             Value::Number(n) => write!(f, "{}", n),
             Value::String(s) => write!(f, "{:?}", s),
-            Value::Function(u) => write!(f, "{:?}", u),
             Value::Object(o) => write!(f, "{:?}", o),
         }
     }
@@ -372,13 +375,6 @@ type Result<T> = StdResult<T, Error>;
 /// An error originating from `MiniV8` usage.
 #[derive(Debug)]
 pub(crate) enum Error {
-    /// A JavaScript value could not be converted to the expected Rust type.
-    FromJsConversionError {
-        /// Name of the JavaScript type that could not be converted.
-        from: &'static str,
-        /// Name of the Rust type that could not be created.
-        to: &'static str,
-    },
     /// An evaluation timeout occurred.
     Timeout,
     /// An exception that occurred within the JavaScript environment.
@@ -390,12 +386,6 @@ impl Error {
     pub(crate) fn to_value(self, mv8: &MiniV8) -> Value {
         match self {
             Error::Value(value) => value,
-            Error::FromJsConversionError { .. } => {
-                let object = mv8.create_object();
-                let _ = object.set("name", "TypeError");
-                let _ = object.set("message", self.to_string());
-                Value::Object(object)
-            }
             _ => {
                 let object = mv8.create_object();
                 let _ = object.set("name", "Error");
@@ -404,56 +394,14 @@ impl Error {
             }
         }
     }
-
-    fn from_js_conversion(from: &'static str, to: &'static str) -> Error {
-        Error::FromJsConversionError { from, to }
-    }
 }
 
 impl fmt::Display for Error {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            Error::FromJsConversionError { from, to } => {
-                write!(fmt, "error converting JavaScript {} to {}", from, to)
-            }
             Error::Timeout => write!(fmt, "evaluation timed out"),
             Error::Value(v) => write!(fmt, "JavaScript runtime error ({})", v.type_name()),
         }
-    }
-}
-
-#[derive(Clone)]
-pub(crate) struct Function {
-    mv8: MiniV8,
-    handle: v8::Global<v8::Function>,
-}
-
-impl Function {
-    /// Calls the function with the given arguments, with `this` set to `undefined`.
-    pub(crate) fn call<A, R>(&self, args: A) -> Result<R>
-    where
-        A: ToValues,
-        R: FromValue,
-    {
-        let this = Value::Undefined;
-        let args = args.to_values(&self.mv8)?;
-        self.mv8
-            .try_catch(|scope| {
-                let function = v8::Local::new(scope, self.handle.clone());
-                let this = this.to_v8_value(scope);
-                let args = args.into_vec();
-                let args_v8: Vec<_> = args.into_iter().map(|v| v.to_v8_value(scope)).collect();
-                let result = function.call(scope, this, &args_v8);
-                self.mv8.exception(scope)?;
-                Ok(Value::from_v8_value(&self.mv8, scope, result.unwrap()))
-            })
-            .and_then(|v| v.into(&self.mv8))
-    }
-}
-
-impl fmt::Debug for Function {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "<function>")
     }
 }
 
@@ -492,15 +440,6 @@ impl FromValue for Value {
 impl ToValue for String {
     fn to_value(self, _mv8: &MiniV8) -> Result<Value> {
         Ok(Value::String(self))
-    }
-}
-
-impl FromValue for Function {
-    fn from_value(value: Value, _mv8: &MiniV8) -> Result<Function> {
-        match value {
-            Value::Function(f) => Ok(f),
-            value => Err(Error::from_js_conversion(value.type_name(), "Function")),
-        }
     }
 }
 
@@ -599,6 +538,7 @@ impl fmt::Debug for Object {
             let keys: Result<Vec<String>> = (0..len)
                 .map(|index| -> Result<String> {
                     let key = keys.get_index(scope, index).unwrap();
+                    self.mv8.exception(scope)?;
                     Value::from_v8_value(&self.mv8, scope, key).coerce_string(&self.mv8)
                 })
                 .collect();

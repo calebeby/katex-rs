@@ -13,16 +13,13 @@ pub struct Engine(mini_v8::MiniV8);
 mod mini_v8;
 
 fn convert_error(e: mini_v8::Error, engine: &mini_v8::MiniV8) -> Error {
-    match e {
-        mini_v8::Error::FromJsConversionError { .. } => Error::JsValueError(format!("{e}")),
-        _ => Error::JsExecError({
-            let formatted = format!("{e}");
-            e.to_value(engine)
-                .coerce_string(engine)
-                .map(|s| s.to_rust_string())
-                .unwrap_or(formatted)
-        }),
-    }
+    Error::JsExecError({
+        let formatted = format!("{e}");
+        e.to_value(engine)
+            .coerce_string(engine)
+            .map(|s| s.to_rust_string())
+            .unwrap_or(formatted)
+    })
 }
 
 impl JsEngine for Engine {
@@ -45,13 +42,11 @@ impl JsEngine for Engine {
         func_name: &str,
         args: impl Iterator<Item = Self::JsValue<'a>>,
     ) -> Result<Self::JsValue<'a>> {
-        let function = self
-            .0
-            .global()
-            .get::<String, mini_v8::Function>(func_name.to_owned())
-            .map_err(|e| convert_error(e, &self.0))?;
         let args: mini_v8::Values = args.map(|v| v.value).collect();
-        let result = function.call(args).map_err(|e| convert_error(e, &self.0))?;
+        let result = self
+            .0
+            .call_global_function(func_name.to_owned(), args)
+            .map_err(|e| convert_error(e, &self.0))?;
         Ok(Value {
             value: result,
             engine: &self.0,
