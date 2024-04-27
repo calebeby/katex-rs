@@ -417,12 +417,6 @@ impl FromValue for StdString {
     }
 }
 
-impl<'a> ToValue for &'a str {
-    fn to_value(self, mv8: &MiniV8) -> Result<Value> {
-        Ok(Value::String(mv8.create_string(self)))
-    }
-}
-
 impl ToValue for i32 {
     fn to_value(self, _mv8: &MiniV8) -> Result<Value> {
         Ok(Value::Number(self as f64))
