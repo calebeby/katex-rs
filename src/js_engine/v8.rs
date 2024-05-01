@@ -8,7 +8,6 @@ use std::cell::RefCell;
 use std::fmt;
 use std::iter::FromIterator;
 use std::rc::Rc;
-use std::string::String as StdString;
 use std::sync::Once;
 use std::vec;
 
@@ -119,7 +118,7 @@ impl MiniV8 {
         }
     }
 
-    pub(crate) fn call_global_function<A>(&self, func_name: StdString, args: A) -> Result<MV8Value>
+    pub(crate) fn call_global_function<A>(&self, func_name: String, args: A) -> Result<MV8Value>
     where
         A: ToValues,
     {
@@ -460,7 +459,7 @@ pub(crate) struct MV8String {
 
 impl MV8String {
     /// Returns a Rust string converted from the V8 string.
-    pub(crate) fn to_rust_string(&self) -> StdString {
+    pub(crate) fn to_rust_string(&self) -> String {
         self.mv8
             .scope(|scope| v8::Local::new(scope, self.handle.clone()).to_rust_string_lossy(scope))
     }
@@ -496,13 +495,13 @@ impl ToValue for bool {
     }
 }
 
-impl ToValue for StdString {
+impl ToValue for String {
     fn to_value(self, mv8: &MiniV8) -> Result<MV8Value> {
         Ok(MV8Value::String(mv8.create_string(&self)))
     }
 }
 
-impl FromValue for StdString {
+impl FromValue for String {
     fn from_value(value: MV8Value, mv8: &MiniV8) -> Result<Self> {
         Ok(value.coerce_string(mv8)?.to_rust_string())
     }
