@@ -203,28 +203,22 @@ impl Interface {
     }
 
     fn new(isolate: v8::OwnedIsolate) -> Interface {
-        Interface(Rc::new(RefCell::new(InterfaceEntry::Isolate(isolate))))
+        Interface(Rc::new(RefCell::new(InterfaceEntry(isolate))))
     }
 }
 
-enum InterfaceEntry {
-    Isolate(v8::OwnedIsolate),
-}
+struct InterfaceEntry(v8::OwnedIsolate);
 
 impl InterfaceEntry {
     fn scope<F, T>(&mut self, func: F) -> T
     where
         F: FnOnce(&mut v8::ContextScope<v8::HandleScope>) -> T,
     {
-        match self {
-            InterfaceEntry::Isolate(isolate) => {
-                let global_context = isolate.get_slot::<Global>().unwrap().context.clone();
-                let scope = &mut v8::HandleScope::new(isolate);
-                let context = v8::Local::new(scope, global_context);
-                let scope = &mut v8::ContextScope::new(scope, context);
-                func(scope)
-            }
-        }
+        let global_context = self.0.get_slot::<Global>().unwrap().context.clone();
+        let scope = &mut v8::HandleScope::new(&mut self.0);
+        let context = v8::Local::new(scope, global_context);
+        let scope = &mut v8::ContextScope::new(scope, context);
+        func(scope)
     }
 }
 
