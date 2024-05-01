@@ -74,7 +74,10 @@ impl JsEngine for Engine {
 
     fn create_string_value(&self, input: String) -> Result<Self::JsValue<'_>> {
         Ok(Value {
-            value: input.to_value(&self.0)?,
+            value: {
+                let mv8 = &self.0;
+                Ok(MV8Value::String(mv8.create_string(&input)))
+            }?,
             engine: &self.0,
         })
     }
@@ -135,7 +138,7 @@ impl MiniV8 {
             let global = scope.get_current_context().global(scope);
             v8::Global::new(scope, global)
         });
-        let key = func_name.to_value(self)?;
+        let key = Ok(MV8Value::String(self.create_string(&func_name)))?;
         let args = args.to_values(self)?;
         self.try_catch(|scope| {
             let object = v8::Local::new(scope, global);
@@ -487,18 +490,6 @@ impl FromValue for MV8Value {
     }
 }
 
-impl ToValue for MV8String {
-    fn to_value(self, _mv8: &MiniV8) -> Result<MV8Value> {
-        Ok(MV8Value::String(self))
-    }
-}
-
-impl ToValue for String {
-    fn to_value(self, mv8: &MiniV8) -> Result<MV8Value> {
-        Ok(MV8Value::String(mv8.create_string(&self)))
-    }
-}
-
 impl FromValue for String {
     fn from_value(value: MV8Value, mv8: &MiniV8) -> Result<Self> {
         Ok(value.coerce_string(mv8)?.to_rust_string())
@@ -523,11 +514,10 @@ impl Object {
     ///
     /// Returns an error if `ToValue::to_value` fails for the key or if the key value could not be
     /// cast to a property key string.
-    fn get<K: ToValue, V: FromValue>(&self, key: K) -> Result<V> {
-        let key = key.to_value(&self.mv8)?;
+    fn get<V: FromValue>(&self, key: MV8String) -> Result<V> {
         self.mv8.try_catch(|scope| {
             let object = v8::Local::new(scope, self.handle.clone());
-            let key = key.to_v8_value(scope);
+            let key = MV8Value::String(key).to_v8_value(scope);
             let result = object.get(scope, key);
             V::from_value(
                 MV8Value::from_v8_value(&self.mv8, scope, result.unwrap()),
@@ -540,8 +530,11 @@ impl Object {
     ///
     /// Returns an error if `ToValue::to_value` fails for either the key or the value or if the key
     /// value could not be cast to a property key string.
-    fn set<K: ToValue, V: ToValue>(&self, key: K, value: V) -> Result<()> {
-        let key = key.to_value(&self.mv8)?;
+    fn set<V: ToValue>(&self, key: String, value: V) -> Result<()> {
+        let key = {
+            let mv8 = &self.mv8;
+            Ok(MV8Value::String(mv8.create_string(&key)))
+        }?;
         let value = value.to_value(&self.mv8)?;
         self.mv8.try_catch(|scope| {
             let object = v8::Local::new(scope, self.handle.clone());
@@ -579,7 +572,7 @@ impl fmt::Debug for Object {
         write!(f, "{{ ")?;
         for (i, k) in keys.iter().cloned().enumerate() {
             write!(f, "{:?}: ", k)?;
-            match self.get::<_, MV8Value>(k) {
+            match self.get::<MV8Value>(k) {
                 Ok(v) => write!(f, "{:?}", v)?,
                 Err(_) => write!(f, "?")?,
             };
