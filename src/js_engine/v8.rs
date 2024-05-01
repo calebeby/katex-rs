@@ -316,11 +316,6 @@ pub(crate) enum MV8Value {
 }
 
 impl MV8Value {
-    /// A wrapper around `FromValue::from_value`.
-    fn into<T: FromValue>(self, mv8: &MiniV8) -> Result<T> {
-        T::from_value(self, mv8)
-    }
-
     /// Coerces a value to a string. Nearly all JavaScript values are coercible to strings, but this
     /// may fail with a runtime error if `toString()` fails or under otherwise extraordinary
     /// circumstances (e.g. if the ECMAScript `ToString` implementation throws an error).
@@ -539,14 +534,15 @@ impl Object {
     /// cast to a property key string.
     pub(crate) fn get<K: ToValue, V: FromValue>(&self, key: K) -> Result<V> {
         let key = key.to_value(&self.mv8)?;
-        self.mv8
-            .try_catch(|scope| {
-                let object = v8::Local::new(scope, self.handle.clone());
-                let key = key.to_v8_value(scope);
-                let result = object.get(scope, key);
-                Ok(MV8Value::from_v8_value(&self.mv8, scope, result.unwrap()))
-            })
-            .and_then(|v| v.into(&self.mv8))
+        self.mv8.try_catch(|scope| {
+            let object = v8::Local::new(scope, self.handle.clone());
+            let key = key.to_v8_value(scope);
+            let result = object.get(scope, key);
+            Ok(V::from_value(
+                MV8Value::from_v8_value(&self.mv8, scope, result.unwrap()),
+                &self.mv8,
+            )?)
+        })
     }
 
     /// Sets an object property using the given key and value.
