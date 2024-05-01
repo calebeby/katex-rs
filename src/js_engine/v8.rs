@@ -63,8 +63,15 @@ impl JsEngine for Engine {
     }
 
     fn create_string_value(&self, input: String) -> Result<Self::JsValue<'_>> {
+        let mv8_string = self.0.scope(|scope| {
+            let string = v8::String::new(scope, &input).unwrap();
+            MV8String {
+                mv8: self.0.clone(),
+                handle: v8::Global::new(scope, string),
+            }
+        });
         Ok(Value {
-            value: MV8Value::String(self.0.create_string(&input)),
+            value: MV8Value::String(mv8_string),
             engine: &self.0,
         })
     }
@@ -153,21 +160,6 @@ impl MiniV8 {
             let script = v8::Script::compile(scope, source, None);
             let result = script.unwrap().run(scope);
             Ok(MV8Value::from_v8_value(self, scope, result.unwrap()))
-        })
-    }
-
-    /// Creates and returns a string managed by V8.
-    ///
-    /// # Panics
-    ///
-    /// Panics if source value is longer than `(1 << 28) - 16` bytes.
-    fn create_string(&self, value: &str) -> MV8String {
-        self.scope(|scope| {
-            let string = v8::String::new(scope, value).unwrap();
-            MV8String {
-                mv8: self.clone(),
-                handle: v8::Global::new(scope, string),
-            }
         })
     }
 
