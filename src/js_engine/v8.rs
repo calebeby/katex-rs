@@ -73,7 +73,13 @@ impl JsEngine for Engine {
         &'a self,
         input: impl Iterator<Item = (String, Self::JsValue<'a>)>,
     ) -> Result<Self::JsValue<'a>> {
-        let obj = self.0.create_object();
+        let obj = self.0.scope(|scope| {
+            let object = v8::Object::new(scope);
+            Object {
+                mv8: self.0.clone(),
+                handle: v8::Global::new(scope, object),
+            }
+        });
         for (k, v) in input {
             obj.set(k, v.value)?;
         }
@@ -162,17 +168,6 @@ impl MiniV8 {
             MV8String {
                 mv8: self.clone(),
                 handle: v8::Global::new(scope, string),
-            }
-        })
-    }
-
-    /// Creates and returns an empty `Object` managed by V8.
-    fn create_object(&self) -> Object {
-        self.scope(|scope| {
-            let object = v8::Object::new(scope);
-            Object {
-                mv8: self.clone(),
-                handle: v8::Global::new(scope, object),
             }
         })
     }
