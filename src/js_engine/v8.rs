@@ -176,8 +176,7 @@ impl MiniV8 {
     where
         F: FnOnce(&mut v8::ContextScope<v8::HandleScope>) -> T,
     {
-        let top_mut: &mut InterfaceEntry = &mut self.interface_entry.borrow_mut();
-        top_mut.scope(func)
+        self.interface_entry.borrow_mut().scope(func)
     }
 
     fn try_catch<F, T>(&self, func: F) -> Result<T>
