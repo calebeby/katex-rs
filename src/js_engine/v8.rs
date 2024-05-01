@@ -44,21 +44,30 @@ impl JsEngine for Engine {
 
     fn create_bool_value(&self, input: bool) -> Result<Self::JsValue<'_>> {
         Ok(Value {
-            value: input.to_value(&self.0)?,
+            value: {
+                let _mv8 = &self.0;
+                Ok(MV8Value::Boolean(input))
+            }?,
             engine: &self.0,
         })
     }
 
     fn create_int_value(&self, input: i32) -> Result<Self::JsValue<'_>> {
         Ok(Value {
-            value: input.to_value(&self.0)?,
+            value: {
+                let _mv8 = &self.0;
+                Ok(MV8Value::Number(input as f64))
+            }?,
             engine: &self.0,
         })
     }
 
     fn create_float_value(&self, input: f64) -> Result<Self::JsValue<'_>> {
         Ok(Value {
-            value: input.to_value(&self.0)?,
+            value: {
+                let _mv8 = &self.0;
+                Ok(MV8Value::Number(input))
+            }?,
             engine: &self.0,
         })
     }
@@ -484,12 +493,6 @@ impl ToValue for MV8String {
     }
 }
 
-impl ToValue for bool {
-    fn to_value(self, _mv8: &MiniV8) -> Result<MV8Value> {
-        Ok(MV8Value::Boolean(self))
-    }
-}
-
 impl ToValue for String {
     fn to_value(self, mv8: &MiniV8) -> Result<MV8Value> {
         Ok(MV8Value::String(mv8.create_string(&self)))
@@ -499,18 +502,6 @@ impl ToValue for String {
 impl FromValue for String {
     fn from_value(value: MV8Value, mv8: &MiniV8) -> Result<Self> {
         Ok(value.coerce_string(mv8)?.to_rust_string())
-    }
-}
-
-impl ToValue for i32 {
-    fn to_value(self, _mv8: &MiniV8) -> Result<MV8Value> {
-        Ok(MV8Value::Number(self as f64))
-    }
-}
-
-impl ToValue for f64 {
-    fn to_value(self, _mv8: &MiniV8) -> Result<MV8Value> {
-        Ok(MV8Value::Number(self))
     }
 }
 
@@ -538,10 +529,10 @@ impl Object {
             let object = v8::Local::new(scope, self.handle.clone());
             let key = key.to_v8_value(scope);
             let result = object.get(scope, key);
-            Ok(V::from_value(
+            V::from_value(
                 MV8Value::from_v8_value(&self.mv8, scope, result.unwrap()),
                 &self.mv8,
-            )?)
+            )
         })
     }
 
