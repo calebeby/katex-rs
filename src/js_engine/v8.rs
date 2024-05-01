@@ -184,7 +184,8 @@ impl Interface {
     where
         F: FnOnce(&mut v8::ContextScope<v8::HandleScope>) -> T,
     {
-        self.top(|entry| entry.scope(func))
+        let top_mut: &mut InterfaceEntry = &mut self.0.borrow_mut();
+        top_mut.scope(func)
     }
 
     fn try_catch<F, T>(&self, func: F) -> Result<T>
@@ -203,14 +204,6 @@ impl Interface {
 
     fn new(isolate: v8::OwnedIsolate) -> Interface {
         Interface(Rc::new(RefCell::new(InterfaceEntry::Isolate(isolate))))
-    }
-
-    fn top<F, T>(&self, func: F) -> T
-    where
-        F: FnOnce(&mut InterfaceEntry) -> T,
-    {
-        let mut top_mut = self.0.borrow_mut();
-        func(&mut top_mut)
     }
 }
 
