@@ -31,7 +31,7 @@ impl JsEngine for Engine {
         func_name: &str,
         args: impl Iterator<Item = Self::JsValue<'a>>,
     ) -> Result<Self::JsValue<'a>> {
-        let args: Vec<MV8Value> = args.map(|v| v.value).collect();
+        let args = args.map(|v| v.value).collect();
         let result = self.0.call_global_function(func_name.to_owned(), args)?;
         Ok(Value {
             value: result,
@@ -41,31 +41,40 @@ impl JsEngine for Engine {
 
     fn create_bool_value(&self, input: bool) -> Result<Self::JsValue<'_>> {
         Ok(Value {
-            value: MV8Value::Boolean(input),
+            value: self.0.scope(|scope| {
+                let local = v8::Local::<v8::Value>::from(v8::Boolean::new(scope, input));
+                v8::Global::new(scope, local)
+            }),
             engine: &self.0,
         })
     }
 
     fn create_int_value(&self, input: i32) -> Result<Self::JsValue<'_>> {
         Ok(Value {
-            value: MV8Value::Number(input as f64),
+            value: self.0.scope(|scope| {
+                let local = v8::Local::<v8::Value>::from(v8::Integer::new(scope, input));
+                v8::Global::new(scope, local)
+            }),
             engine: &self.0,
         })
     }
 
     fn create_float_value(&self, input: f64) -> Result<Self::JsValue<'_>> {
         Ok(Value {
-            value: MV8Value::Number(input),
+            value: self.0.scope(|scope| {
+                let local = v8::Local::<v8::Value>::from(v8::Number::new(scope, input));
+                v8::Global::new(scope, local)
+            }),
             engine: &self.0,
         })
     }
 
     fn create_string_value(&self, input: String) -> Result<Self::JsValue<'_>> {
         Ok(Value {
-            value: MV8Value::String(self.0.scope(|scope| {
-                let string = v8::String::new(scope, &input).unwrap();
-                v8::Global::new(scope, string)
-            })),
+            value: self.0.scope(|scope| {
+                let local = v8::Local::<v8::Value>::from(v8::String::new(scope, &input).unwrap());
+                v8::Global::new(scope, local)
+            }),
             engine: &self.0,
         })
     }
@@ -74,35 +83,33 @@ impl JsEngine for Engine {
         &'a self,
         input: impl Iterator<Item = (String, Self::JsValue<'a>)>,
     ) -> Result<Self::JsValue<'a>> {
+        let input = input.collect::<Vec<_>>();
         let obj_handle = self.0.scope(|scope| {
-            let local = v8::Object::new(scope);
-            v8::Global::new(scope, local)
-        });
-        for (k, v) in input {
-            self.0.try_catch(|scope| {
+            let object: v8::Local<v8::Object> = v8::Object::new(scope);
+            for (k, v) in input {
                 let key = v8::String::new(scope, &k).unwrap();
-                let object = v8::Local::new(scope, obj_handle.clone());
-                let value = v.value.to_v8_value(scope);
+                let value = v8::Local::new(scope, v.value);
                 object.set(scope, key.into(), value);
-                Ok(())
-            })?;
-        }
+            }
+            v8::Global::new(scope, v8::Local::<v8::Value>::from(object))
+        });
+
         Ok(Value {
-            value: MV8Value::Object(obj_handle),
+            value: obj_handle,
             engine: &self.0,
         })
     }
 }
 
 pub struct Value<'a> {
-    value: MV8Value,
+    value: v8::Global<v8::Value>,
     engine: &'a MiniV8,
 }
 
 impl<'a> JsValue<'a> for Value<'a> {
     fn into_string(self) -> Result<String> {
         self.engine.try_catch(|scope| {
-            let maybe = self.value.to_v8_value(scope).to_string(scope).unwrap();
+            let maybe = v8::Local::new(scope, self.value).to_string(scope).unwrap();
             Ok(maybe.to_rust_string_lossy(scope))
         })
     }
@@ -130,7 +137,11 @@ impl MiniV8 {
         }
     }
 
-    fn call_global_function(&self, func_name: String, args: Vec<MV8Value>) -> Result<MV8Value> {
+    fn call_global_function(
+        &self,
+        func_name: String,
+        args: Vec<v8::Global<v8::Value>>,
+    ) -> Result<v8::Global<v8::Value>> {
         let global = self.scope(|scope| {
             let global = scope.get_current_context().global(scope);
             v8::Global::new(scope, global)
@@ -140,25 +151,24 @@ impl MiniV8 {
             let key = v8::String::new(scope, &func_name).unwrap();
             let result: v8::Local<'_, v8::Value> = object.get(scope, key.into()).unwrap();
             let function: v8::Local<'_, v8::Function> = result.try_into().unwrap();
-            let this = MV8Value::Undefined;
-            let this = this.to_v8_value(scope);
-            let args_v8: Vec<v8::Local<'_, v8::Value>> =
-                args.into_iter().map(|v| v.to_v8_value(scope)).collect();
-            let result = function
-                .call(scope, this, &args_v8)
-                .ok_or(Error::JsExecError(
-                    "Function call did not return a result".to_string(),
-                ))?;
-            Ok(MV8Value::from_v8_value(scope, result))
+            let this = v8::undefined(scope).into();
+            let args: Vec<_> = args
+                .into_iter()
+                .map(|arg| v8::Local::new(scope, arg))
+                .collect();
+            let result = function.call(scope, this, &args).ok_or(Error::JsExecError(
+                "Function call did not return a result".to_string(),
+            ))?;
+            Ok(v8::Global::new(scope, result))
         })
     }
 
-    fn eval(&self, script: &str) -> Result<MV8Value> {
+    fn eval(&self, script: &str) -> Result<v8::Global<v8::Value>> {
         self.try_catch(|scope| {
             let source = v8::String::new(scope, script).unwrap();
             let script = v8::Script::compile(scope, source, None);
-            let result = script.unwrap().run(scope);
-            Ok(MV8Value::from_v8_value(scope, result.unwrap()))
+            let result = script.unwrap().run(scope).unwrap();
+            Ok(v8::Global::new(scope, result))
         })
     }
 
@@ -234,50 +244,4 @@ fn initialize_v8() {
         v8::V8::initialize_platform(platform);
         v8::V8::initialize();
     });
-}
-
-enum MV8Value {
-    Undefined,
-    Null,
-    Boolean(bool),
-    Number(f64),
-    String(v8::Global<v8::String>),
-    Object(v8::Global<v8::Object>),
-}
-
-impl MV8Value {
-    fn from_v8_value(scope: &mut v8::HandleScope, value: v8::Local<v8::Value>) -> MV8Value {
-        if value.is_undefined() {
-            MV8Value::Undefined
-        } else if value.is_null() {
-            MV8Value::Null
-        } else if value.is_boolean() {
-            MV8Value::Boolean(value.boolean_value(scope))
-        } else if value.is_int32() {
-            MV8Value::Number(value.int32_value(scope).unwrap() as f64)
-        } else if value.is_number() {
-            MV8Value::Number(value.number_value(scope).unwrap())
-        } else if value.is_string() {
-            let value: v8::Local<v8::String> = value.try_into().unwrap();
-            let handle = v8::Global::new(scope, value);
-            MV8Value::String(handle)
-        } else if value.is_object() {
-            let value: v8::Local<v8::Object> = value.try_into().unwrap();
-            let handle = v8::Global::new(scope, value);
-            MV8Value::Object(handle)
-        } else {
-            MV8Value::Undefined
-        }
-    }
-
-    fn to_v8_value<'s>(&self, scope: &mut v8::HandleScope<'s>) -> v8::Local<'s, v8::Value> {
-        match self {
-            MV8Value::Undefined => v8::undefined(scope).into(),
-            MV8Value::Null => v8::null(scope).into(),
-            MV8Value::Boolean(v) => v8::Boolean::new(scope, *v).into(),
-            MV8Value::Number(v) => v8::Number::new(scope, *v).into(),
-            MV8Value::Object(v) => v8::Local::new(scope, v.clone()).into(),
-            MV8Value::String(v) => v8::Local::new(scope, v.clone()).into(),
-        }
-    }
 }
