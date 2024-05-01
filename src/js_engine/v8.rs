@@ -62,15 +62,11 @@ impl JsEngine for Engine {
     }
 
     fn create_string_value(&self, input: String) -> Result<Self::JsValue<'_>> {
-        let mv8_string = self.0.scope(|scope| {
-            let string = v8::String::new(scope, &input).unwrap();
-            MV8String {
-                mv8: self.0.clone(),
-                handle: v8::Global::new(scope, string),
-            }
-        });
         Ok(Value {
-            value: MV8Value::String(mv8_string),
+            value: MV8Value::String(self.0.scope(|scope| {
+                let string = v8::String::new(scope, &input).unwrap();
+                v8::Global::new(scope, string)
+            })),
             engine: &self.0,
         })
     }
@@ -110,7 +106,10 @@ pub struct Value<'a> {
 
 impl<'a> JsValue<'a> for Value<'a> {
     fn into_string(self) -> Result<String> {
-        Ok(self.value.coerce_string(self.engine)?.to_rust_string())
+        self.engine.try_catch(|scope| {
+            let maybe = self.value.to_v8_value(scope).to_string(scope).unwrap();
+            Ok(maybe.to_rust_string_lossy(scope))
+        })
     }
 }
 
@@ -286,28 +285,12 @@ enum MV8Value {
     /// A JavaScript floating point number.
     Number(f64),
     /// An immutable JavaScript string, managed by V8.
-    String(MV8String),
+    String(v8::Global<v8::String>),
     /// Reference to a JavaScript object.
     Object(Object),
 }
 
 impl MV8Value {
-    /// Coerces a value to a string. Nearly all JavaScript values are coercible to strings, but this
-    /// may fail with a runtime error if `toString()` fails or under otherwise extraordinary
-    /// circumstances (e.g. if the ECMAScript `ToString` implementation throws an error).
-    fn coerce_string(&self, mv8: &MiniV8) -> Result<MV8String> {
-        match self {
-            MV8Value::String(s) => Ok(s.clone()),
-            value => mv8.try_catch(|scope| {
-                let maybe = value.to_v8_value(scope).to_string(scope);
-                Ok(MV8String {
-                    mv8: mv8.clone(),
-                    handle: v8::Global::new(scope, maybe.unwrap()),
-                })
-            }),
-        }
-    }
-
     fn from_v8_value(
         mv8: &MiniV8,
         scope: &mut v8::HandleScope,
@@ -326,10 +309,7 @@ impl MV8Value {
         } else if value.is_string() {
             let value: v8::Local<v8::String> = value.try_into().unwrap();
             let handle = v8::Global::new(scope, value);
-            MV8Value::String(MV8String {
-                mv8: mv8.clone(),
-                handle,
-            })
+            MV8Value::String(handle)
         } else if value.is_object() {
             let value: v8::Local<v8::Object> = value.try_into().unwrap();
             let handle = v8::Global::new(scope, value);
@@ -349,22 +329,8 @@ impl MV8Value {
             MV8Value::Boolean(v) => v8::Boolean::new(scope, *v).into(),
             MV8Value::Number(v) => v8::Number::new(scope, *v).into(),
             MV8Value::Object(v) => v8::Local::new(scope, v.handle.clone()).into(),
-            MV8Value::String(v) => v8::Local::new(scope, v.handle.clone()).into(),
+            MV8Value::String(v) => v8::Local::new(scope, v.clone()).into(),
         }
-    }
-}
-
-#[derive(Clone)]
-struct MV8String {
-    mv8: MiniV8,
-    handle: v8::Global<v8::String>,
-}
-
-impl MV8String {
-    /// Returns a Rust string converted from the V8 string.
-    fn to_rust_string(&self) -> String {
-        self.mv8
-            .scope(|scope| v8::Local::new(scope, self.handle.clone()).to_rust_string_lossy(scope))
     }
 }
 
