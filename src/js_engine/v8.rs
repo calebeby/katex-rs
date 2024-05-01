@@ -150,7 +150,7 @@ impl MiniV8 {
     /// Executes a JavaScript script and returns its result.
     fn eval(&self, script: &str) -> Result<MV8Value> {
         self.try_catch(|scope| {
-            let source = create_string(scope, script);
+            let source = v8::String::new(scope, script).unwrap();
             let script = v8::Script::compile(scope, source, None);
             let result = script.unwrap().run(scope);
             Ok(MV8Value::from_v8_value(self, scope, result.unwrap()))
@@ -164,7 +164,7 @@ impl MiniV8 {
     /// Panics if source value is longer than `(1 << 28) - 16` bytes.
     fn create_string(&self, value: &str) -> MV8String {
         self.scope(|scope| {
-            let string = create_string(scope, value);
+            let string = v8::String::new(scope, value).unwrap();
             MV8String {
                 mv8: self.clone(),
                 handle: v8::Global::new(scope, string),
@@ -277,10 +277,6 @@ fn initialize_slots(isolate: &mut v8::Isolate) {
     scope.set_slot(Global {
         context: global_context,
     });
-}
-
-fn create_string<'s>(scope: &mut v8::HandleScope<'s>, value: &str) -> v8::Local<'s, v8::String> {
-    v8::String::new(scope, value).expect("string exceeds maximum length")
 }
 
 /// A JavaScript value.
