@@ -154,7 +154,6 @@ impl MiniV8 {
         })
     }
 
-    /// Executes a JavaScript script and returns its result.
     fn eval(&self, script: &str) -> Result<MV8Value> {
         self.try_catch(|scope| {
             let source = v8::String::new(scope, script).unwrap();
@@ -164,8 +163,6 @@ impl MiniV8 {
         })
     }
 
-    // Opens a new handle scope in the global context. Nesting calls to this or `MiniV8::try_catch`
-    // will cause a panic.
     fn scope<F, T>(&self, func: F) -> T
     where
         F: FnOnce(&mut v8::ContextScope<v8::HandleScope>) -> T,
@@ -173,8 +170,6 @@ impl MiniV8 {
         self.interface.scope(func)
     }
 
-    // Opens a new try-catch scope in the global context.
-    // Nesting calls to this or `MiniV8::scope` will cause a panic.
     fn try_catch<F, T>(&self, func: F) -> Result<T>
     where
         F: FnOnce(&mut v8::TryCatch<v8::HandleScope>) -> Result<T>,
@@ -187,7 +182,6 @@ impl MiniV8 {
 struct Interface(Rc<RefCell<InterfaceEntry>>);
 
 impl Interface {
-    // Opens a new handle scope in the global context.
     fn scope<F, T>(&self, func: F) -> T
     where
         F: FnOnce(&mut v8::ContextScope<v8::HandleScope>) -> T,
@@ -195,7 +189,6 @@ impl Interface {
         self.top(|entry| entry.scope(func))
     }
 
-    // Opens a new try-catch scope in the global context.
     fn try_catch<F, T>(&self, func: F) -> Result<T>
     where
         F: FnOnce(&mut v8::TryCatch<v8::HandleScope>) -> Result<T>,
@@ -258,25 +251,13 @@ fn initialize_v8() {
     });
 }
 
-/// A JavaScript value.
-///
-/// `Value`s can either hold direct values (undefined, null, booleans, numbers, dates) or references
-/// (strings, arrays, functions, other objects). Cloning values (via Rust's `Clone`) of the direct
-/// types defers to Rust's `Copy`, while cloning values of the referential types results in a simple
-/// reference clone similar to JavaScript's own "by-reference" semantics.
 #[derive(Clone)]
 enum MV8Value {
-    /// The JavaScript value `undefined`.
     Undefined,
-    /// The JavaScript value `null`.
     Null,
-    /// The JavaScript value `true` or `false`.
     Boolean(bool),
-    /// A JavaScript floating point number.
     Number(f64),
-    /// An immutable JavaScript string, managed by V8.
     String(v8::Global<v8::String>),
-    /// Reference to a JavaScript object.
     Object(v8::Global<v8::Object>),
 }
 
