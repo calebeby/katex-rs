@@ -44,40 +44,28 @@ impl JsEngine for Engine {
 
     fn create_bool_value(&self, input: bool) -> Result<Self::JsValue<'_>> {
         Ok(Value {
-            value: {
-                let _mv8 = &self.0;
-                Ok(MV8Value::Boolean(input))
-            }?,
+            value: MV8Value::Boolean(input),
             engine: &self.0,
         })
     }
 
     fn create_int_value(&self, input: i32) -> Result<Self::JsValue<'_>> {
         Ok(Value {
-            value: {
-                let _mv8 = &self.0;
-                Ok(MV8Value::Number(input as f64))
-            }?,
+            value: MV8Value::Number(input as f64),
             engine: &self.0,
         })
     }
 
     fn create_float_value(&self, input: f64) -> Result<Self::JsValue<'_>> {
         Ok(Value {
-            value: {
-                let _mv8 = &self.0;
-                Ok(MV8Value::Number(input))
-            }?,
+            value: MV8Value::Number(input),
             engine: &self.0,
         })
     }
 
     fn create_string_value(&self, input: String) -> Result<Self::JsValue<'_>> {
         Ok(Value {
-            value: {
-                let mv8 = &self.0;
-                Ok(MV8Value::String(mv8.create_string(&input)))
-            }?,
+            value: MV8Value::String(self.0.create_string(&input)),
             engine: &self.0,
         })
     }
@@ -531,10 +519,7 @@ impl Object {
     /// Returns an error if `ToValue::to_value` fails for either the key or the value or if the key
     /// value could not be cast to a property key string.
     fn set<V: ToValue>(&self, key: String, value: V) -> Result<()> {
-        let key = {
-            let mv8 = &self.mv8;
-            Ok(MV8Value::String(mv8.create_string(&key)))
-        }?;
+        let key = MV8Value::String(self.mv8.create_string(&key));
         let value = value.to_value(&self.mv8)?;
         self.mv8.try_catch(|scope| {
             let object = v8::Local::new(scope, self.handle.clone());
