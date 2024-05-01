@@ -5,7 +5,6 @@ use crate::Result;
 
 use crate::Error;
 use std::cell::RefCell;
-use std::fmt;
 use std::rc::Rc;
 use std::sync::Once;
 use std::vec;
@@ -88,7 +87,13 @@ impl JsEngine for Engine {
             }
         });
         for (k, v) in input {
-            obj.set(k, v.value)?;
+            obj.mv8.try_catch(|scope| {
+                let key = v8::String::new(scope, &k).unwrap();
+                let object = v8::Local::new(scope, obj.handle.clone());
+                let value = v.value.to_v8_value(scope);
+                object.set(scope, key.into(), value);
+                Ok(())
+            })?;
         }
         Ok(Value {
             value: MV8Value::Object(obj),
@@ -106,12 +111,6 @@ pub struct Value<'a> {
 impl<'a> JsValue<'a> for Value<'a> {
     fn into_string(self) -> Result<String> {
         Ok(self.value.coerce_string(self.engine)?.to_rust_string())
-    }
-}
-
-impl<'a> fmt::Debug for Value<'a> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Value").field("value", &self.value).finish()
     }
 }
 
@@ -355,19 +354,6 @@ impl MV8Value {
     }
 }
 
-impl fmt::Debug for MV8Value {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            MV8Value::Undefined => write!(f, "undefined"),
-            MV8Value::Null => write!(f, "null"),
-            MV8Value::Boolean(b) => write!(f, "{:?}", b),
-            MV8Value::Number(n) => write!(f, "{}", n),
-            MV8Value::String(s) => write!(f, "{:?}", s),
-            MV8Value::Object(o) => write!(f, "{:?}", o),
-        }
-    }
-}
-
 #[derive(Clone)]
 struct MV8String {
     mv8: MiniV8,
@@ -382,82 +368,8 @@ impl MV8String {
     }
 }
 
-impl fmt::Debug for MV8String {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{:?}", self.to_rust_string())
-    }
-}
-
 #[derive(Clone)]
 struct Object {
     mv8: MiniV8,
     handle: v8::Global<v8::Object>,
-}
-
-impl Object {
-    /// Get an object property value using the given key. Returns `Value::Undefined` if no property
-    /// with the key exists.
-    ///
-    /// Returns an error if `ToValue::to_value` fails for the key or if the key value could not be
-    /// cast to a property key string.
-    fn get(&self, key: MV8String) -> Result<MV8Value> {
-        self.mv8.try_catch(|scope| {
-            let object = v8::Local::new(scope, self.handle.clone());
-            let key = v8::Local::new(scope, key.handle).into();
-            let result = object.get(scope, key);
-            Ok(MV8Value::from_v8_value(&self.mv8, scope, result.unwrap()))
-        })
-    }
-
-    /// Sets an object property using the given key and value.
-    ///
-    /// Returns an error if `ToValue::to_value` fails for either the key or the value or if the key
-    /// value could not be cast to a property key string.
-    fn set(&self, key: String, value: MV8Value) -> Result<()> {
-        self.mv8.try_catch(|scope| {
-            let key = v8::String::new(scope, &key).unwrap();
-            let object = v8::Local::new(scope, self.handle.clone());
-            let value = value.to_v8_value(scope);
-            object.set(scope, key.into(), value);
-            Ok(())
-        })
-    }
-}
-
-impl fmt::Debug for Object {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let keys = match self.mv8.try_catch(|scope| -> Result<Vec<MV8String>> {
-            let object = v8::Local::new(scope, self.handle.clone());
-            let keys = object.get_own_property_names(scope, Default::default());
-            let keys = keys.unwrap();
-            let len = keys.length();
-            let keys: Result<Vec<MV8String>> = (0..len)
-                .map(|index| -> Result<MV8String> {
-                    let key = keys.get_index(scope, index).unwrap();
-                    MV8Value::from_v8_value(&self.mv8, scope, key).coerce_string(&self.mv8)
-                })
-                .collect();
-            keys
-        }) {
-            Ok(keys) => keys,
-            Err(_) => return write!(f, "<object with keys exception>"),
-        };
-
-        if keys.is_empty() {
-            return write!(f, "{{}}");
-        }
-
-        write!(f, "{{ ")?;
-        for (i, k) in keys.iter().cloned().enumerate() {
-            write!(f, "{:?}: ", k)?;
-            match self.get(k) {
-                Ok(v) => write!(f, "{:?}", v)?,
-                Err(_) => write!(f, "?")?,
-            };
-            if i + 1 < keys.len() {
-                write!(f, ", ")?;
-            }
-        }
-        write!(f, " }}")
-    }
 }
