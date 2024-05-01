@@ -128,11 +128,10 @@ impl MiniV8 {
             let global = scope.get_current_context().global(scope);
             v8::Global::new(scope, global)
         });
-        let key = Ok(MV8Value::String(self.create_string(&func_name)))?;
         self.try_catch(|scope| {
             let object = v8::Local::new(scope, global);
-            let key = key.to_v8_value(scope);
-            let result: v8::Local<'_, v8::Value> = object.get(scope, key).unwrap();
+            let key = v8::String::new(scope, &func_name).unwrap();
+            let result: v8::Local<'_, v8::Value> = object.get(scope, key.into()).unwrap();
             let function: v8::Local<'_, v8::Function> = result.try_into().unwrap();
             let this = MV8Value::Undefined;
             let this = this.to_v8_value(scope);
