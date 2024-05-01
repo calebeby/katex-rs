@@ -7,7 +7,6 @@ use crate::Error;
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Once;
-use std::vec;
 
 /// v8 Engine.
 pub struct Engine(MiniV8);
@@ -95,7 +94,6 @@ impl JsEngine for Engine {
     }
 }
 
-/// v8 Value.
 pub struct Value<'a> {
     value: MV8Value,
     engine: &'a MiniV8,
@@ -119,7 +117,15 @@ impl MiniV8 {
     fn new() -> MiniV8 {
         initialize_v8();
         let mut isolate = v8::Isolate::new(Default::default());
-        initialize_slots(&mut isolate);
+        {
+            let scope = &mut v8::HandleScope::new(&mut isolate);
+            let context = v8::Context::new(scope);
+            let scope = &mut v8::ContextScope::new(scope, context);
+            let global_context = v8::Global::new(scope, context);
+            scope.set_slot(Global {
+                context: global_context,
+            });
+        }
         MiniV8 {
             interface: Interface::new(isolate),
         }
@@ -178,7 +184,7 @@ impl MiniV8 {
 }
 
 #[derive(Clone)]
-struct Interface(Rc<RefCell<Vec<Rc<RefCell<InterfaceEntry>>>>>);
+struct Interface(Rc<RefCell<InterfaceEntry>>);
 
 impl Interface {
     // Opens a new handle scope in the global context.
@@ -205,17 +211,14 @@ impl Interface {
     }
 
     fn new(isolate: v8::OwnedIsolate) -> Interface {
-        Interface(Rc::new(RefCell::new(vec![Rc::new(RefCell::new(
-            InterfaceEntry::Isolate(isolate),
-        ))])))
+        Interface(Rc::new(RefCell::new(InterfaceEntry::Isolate(isolate))))
     }
 
     fn top<F, T>(&self, func: F) -> T
     where
         F: FnOnce(&mut InterfaceEntry) -> T,
     {
-        let top = self.0.borrow().last().unwrap().clone();
-        let mut top_mut = top.borrow_mut();
+        let mut top_mut = self.0.borrow_mut();
         func(&mut top_mut)
     }
 }
@@ -252,16 +255,6 @@ fn initialize_v8() {
         let platform = v8::new_unprotected_default_platform(0, false).make_shared();
         v8::V8::initialize_platform(platform);
         v8::V8::initialize();
-    });
-}
-
-fn initialize_slots(isolate: &mut v8::Isolate) {
-    let scope = &mut v8::HandleScope::new(isolate);
-    let context = v8::Context::new(scope);
-    let scope = &mut v8::ContextScope::new(scope, context);
-    let global_context = v8::Global::new(scope, context);
-    scope.set_slot(Global {
-        context: global_context,
     });
 }
 
