@@ -412,7 +412,7 @@ impl Object {
     fn get(&self, key: MV8String) -> Result<MV8Value> {
         self.mv8.try_catch(|scope| {
             let object = v8::Local::new(scope, self.handle.clone());
-            let key = MV8Value::String(key).to_v8_value(scope);
+            let key = v8::Local::new(scope, key.handle).into();
             let result = object.get(scope, key);
             Ok(MV8Value::from_v8_value(&self.mv8, scope, result.unwrap()))
         })
@@ -423,12 +423,11 @@ impl Object {
     /// Returns an error if `ToValue::to_value` fails for either the key or the value or if the key
     /// value could not be cast to a property key string.
     fn set(&self, key: String, value: MV8Value) -> Result<()> {
-        let key = MV8Value::String(self.mv8.create_string(&key));
         self.mv8.try_catch(|scope| {
+            let key = v8::String::new(scope, &key).unwrap();
             let object = v8::Local::new(scope, self.handle.clone());
-            let key = key.to_v8_value(scope);
             let value = value.to_v8_value(scope);
-            object.set(scope, key, value);
+            object.set(scope, key.into(), value);
             Ok(())
         })
     }
