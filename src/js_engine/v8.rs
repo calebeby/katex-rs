@@ -42,7 +42,7 @@ impl JsEngine for Engine {
     fn create_bool_value(&self, input: bool) -> Result<Self::JsValue<'_>> {
         Ok(Value {
             value: self.0.scope(|scope| {
-                let local = v8::Local::<v8::Value>::from(v8::Boolean::new(scope, input));
+                let local = v8::Local::from(v8::Boolean::new(scope, input));
                 v8::Global::new(scope, local)
             }),
             engine: &self.0,
@@ -52,7 +52,7 @@ impl JsEngine for Engine {
     fn create_int_value(&self, input: i32) -> Result<Self::JsValue<'_>> {
         Ok(Value {
             value: self.0.scope(|scope| {
-                let local = v8::Local::<v8::Value>::from(v8::Integer::new(scope, input));
+                let local = v8::Local::from(v8::Integer::new(scope, input));
                 v8::Global::new(scope, local)
             }),
             engine: &self.0,
@@ -62,7 +62,7 @@ impl JsEngine for Engine {
     fn create_float_value(&self, input: f64) -> Result<Self::JsValue<'_>> {
         Ok(Value {
             value: self.0.scope(|scope| {
-                let local = v8::Local::<v8::Value>::from(v8::Number::new(scope, input));
+                let local = v8::Local::from(v8::Number::new(scope, input));
                 v8::Global::new(scope, local)
             }),
             engine: &self.0,
@@ -72,7 +72,7 @@ impl JsEngine for Engine {
     fn create_string_value(&self, input: String) -> Result<Self::JsValue<'_>> {
         Ok(Value {
             value: self.0.scope(|scope| {
-                let local = v8::Local::<v8::Value>::from(v8::String::new(scope, &input).unwrap());
+                let local = v8::Local::from(v8::String::new(scope, &input).unwrap());
                 v8::Global::new(scope, local)
             }),
             engine: &self.0,
@@ -85,13 +85,13 @@ impl JsEngine for Engine {
     ) -> Result<Self::JsValue<'a>> {
         let input = input.collect::<Vec<_>>();
         let obj_handle = self.0.scope(|scope| {
-            let object: v8::Local<v8::Object> = v8::Object::new(scope);
+            let object = v8::Object::new(scope);
             for (k, v) in input {
                 let key = v8::String::new(scope, &k).unwrap();
                 let value = v8::Local::new(scope, v.value);
                 object.set(scope, key.into(), value);
             }
-            v8::Global::new(scope, v8::Local::<v8::Value>::from(object))
+            v8::Global::new(scope, v8::Local::from(object))
         });
 
         Ok(Value {
