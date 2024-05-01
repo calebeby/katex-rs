@@ -104,12 +104,12 @@ impl<'a> fmt::Debug for Value<'a> {
 }
 
 #[derive(Clone)]
-pub(crate) struct MiniV8 {
+struct MiniV8 {
     interface: Interface,
 }
 
 impl MiniV8 {
-    pub(crate) fn new() -> MiniV8 {
+    fn new() -> MiniV8 {
         initialize_v8();
         let mut isolate = v8::Isolate::new(Default::default());
         initialize_slots(&mut isolate);
@@ -118,7 +118,7 @@ impl MiniV8 {
         }
     }
 
-    pub(crate) fn call_global_function<A>(&self, func_name: String, args: A) -> Result<MV8Value>
+    fn call_global_function<A>(&self, func_name: String, args: A) -> Result<MV8Value>
     where
         A: ToValues,
     {
@@ -147,7 +147,7 @@ impl MiniV8 {
     }
 
     /// Executes a JavaScript script and returns its result.
-    pub(crate) fn eval(&self, script: &str) -> Result<MV8Value> {
+    fn eval(&self, script: &str) -> Result<MV8Value> {
         self.try_catch(|scope| {
             let source = create_string(scope, script);
             let script = v8::Script::compile(scope, source, None);
@@ -172,7 +172,7 @@ impl MiniV8 {
     }
 
     /// Creates and returns an empty `Object` managed by V8.
-    pub(crate) fn create_object(&self) -> Object {
+    fn create_object(&self) -> Object {
         self.scope(|scope| {
             let object = v8::Object::new(scope);
             Object {
@@ -300,7 +300,7 @@ fn create_string<'s>(scope: &mut v8::HandleScope<'s>, value: &str) -> v8::Local<
 /// types defers to Rust's `Copy`, while cloning values of the referential types results in a simple
 /// reference clone similar to JavaScript's own "by-reference" semantics.
 #[derive(Clone)]
-pub(crate) enum MV8Value {
+enum MV8Value {
     /// The JavaScript value `undefined`.
     Undefined,
     /// The JavaScript value `null`.
@@ -319,7 +319,7 @@ impl MV8Value {
     /// Coerces a value to a string. Nearly all JavaScript values are coercible to strings, but this
     /// may fail with a runtime error if `toString()` fails or under otherwise extraordinary
     /// circumstances (e.g. if the ECMAScript `ToString` implementation throws an error).
-    pub(crate) fn coerce_string(&self, mv8: &MiniV8) -> Result<MV8String> {
+    fn coerce_string(&self, mv8: &MiniV8) -> Result<MV8String> {
         match self {
             MV8Value::String(s) => Ok(s.clone()),
             value => mv8.try_catch(|scope| {
@@ -392,20 +392,20 @@ impl fmt::Debug for MV8Value {
 }
 
 /// Trait for types convertible to `Value`.
-pub(crate) trait ToValue {
+trait ToValue {
     /// Performs the conversion.
     fn to_value(self, mv8: &MiniV8) -> Result<MV8Value>;
 }
 
 /// Trait for types convertible from `Value`.
-pub(crate) trait FromValue: Sized {
+trait FromValue: Sized {
     /// Performs the conversion.
     fn from_value(value: MV8Value, mv8: &MiniV8) -> Result<Self>;
 }
 
 /// A collection of multiple JavaScript values used for interacting with function arguments.
 #[derive(Clone)]
-pub(crate) struct Values(Vec<MV8Value>);
+struct Values(Vec<MV8Value>);
 
 impl Values {
     fn from_vec(vec: Vec<MV8Value>) -> Values {
@@ -427,7 +427,7 @@ impl FromIterator<MV8Value> for Values {
 ///
 /// This is a generalization of `ToValue`, allowing any number of resulting JavaScript values
 /// instead of just one. Any type that implements `ToValue` will automatically implement this trait.
-pub(crate) trait ToValues {
+trait ToValues {
     /// Performs the conversion.
     fn to_values(self, mv8: &MiniV8) -> Result<Values>;
 }
@@ -447,14 +447,14 @@ trait FromValues: Sized {
 }
 
 #[derive(Clone)]
-pub(crate) struct MV8String {
+struct MV8String {
     mv8: MiniV8,
     handle: v8::Global<v8::String>,
 }
 
 impl MV8String {
     /// Returns a Rust string converted from the V8 string.
-    pub(crate) fn to_rust_string(&self) -> String {
+    fn to_rust_string(&self) -> String {
         self.mv8
             .scope(|scope| v8::Local::new(scope, self.handle.clone()).to_rust_string_lossy(scope))
     }
@@ -521,7 +521,7 @@ impl ToValues for Values {
 }
 
 #[derive(Clone)]
-pub(crate) struct Object {
+struct Object {
     mv8: MiniV8,
     handle: v8::Global<v8::Object>,
 }
@@ -532,7 +532,7 @@ impl Object {
     ///
     /// Returns an error if `ToValue::to_value` fails for the key or if the key value could not be
     /// cast to a property key string.
-    pub(crate) fn get<K: ToValue, V: FromValue>(&self, key: K) -> Result<V> {
+    fn get<K: ToValue, V: FromValue>(&self, key: K) -> Result<V> {
         let key = key.to_value(&self.mv8)?;
         self.mv8.try_catch(|scope| {
             let object = v8::Local::new(scope, self.handle.clone());
@@ -549,7 +549,7 @@ impl Object {
     ///
     /// Returns an error if `ToValue::to_value` fails for either the key or the value or if the key
     /// value could not be cast to a property key string.
-    pub(crate) fn set<K: ToValue, V: ToValue>(&self, key: K, value: V) -> Result<()> {
+    fn set<K: ToValue, V: ToValue>(&self, key: K, value: V) -> Result<()> {
         let key = key.to_value(&self.mv8)?;
         let value = value.to_value(&self.mv8)?;
         self.mv8.try_catch(|scope| {
