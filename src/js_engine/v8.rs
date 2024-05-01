@@ -116,7 +116,7 @@ impl<'a> JsValue<'a> for Value<'a> {
 }
 
 struct MiniV8 {
-    interface: Interface,
+    interface_entry: Rc<RefCell<InterfaceEntry>>,
 }
 
 impl MiniV8 {
@@ -133,7 +133,7 @@ impl MiniV8 {
             });
         }
         MiniV8 {
-            interface: Interface::new(isolate),
+            interface_entry: Rc::new(RefCell::new(InterfaceEntry(isolate))),
         }
     }
 
@@ -176,25 +176,7 @@ impl MiniV8 {
     where
         F: FnOnce(&mut v8::ContextScope<v8::HandleScope>) -> T,
     {
-        self.interface.scope(func)
-    }
-
-    fn try_catch<F, T>(&self, func: F) -> Result<T>
-    where
-        F: FnOnce(&mut v8::TryCatch<v8::HandleScope>) -> Result<T>,
-    {
-        self.interface.try_catch(func)
-    }
-}
-
-struct Interface(Rc<RefCell<InterfaceEntry>>);
-
-impl Interface {
-    fn scope<F, T>(&self, func: F) -> T
-    where
-        F: FnOnce(&mut v8::ContextScope<v8::HandleScope>) -> T,
-    {
-        let top_mut: &mut InterfaceEntry = &mut self.0.borrow_mut();
+        let top_mut: &mut InterfaceEntry = &mut self.interface_entry.borrow_mut();
         top_mut.scope(func)
     }
 
@@ -210,10 +192,6 @@ impl Interface {
                 None => Ok(result?),
             }
         })
-    }
-
-    fn new(isolate: v8::OwnedIsolate) -> Interface {
-        Interface(Rc::new(RefCell::new(InterfaceEntry(isolate))))
     }
 }
 
