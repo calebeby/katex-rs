@@ -92,7 +92,7 @@ pub struct Value<'a> {
 
 impl<'a> JsValue<'a> for Value<'a> {
     fn into_string(self) -> Result<String> {
-        String::from_value(self.value, self.engine)
+        Ok(self.value.coerce_string(self.engine)?.to_rust_string())
     }
 }
 
@@ -386,18 +386,6 @@ impl fmt::Debug for MV8Value {
     }
 }
 
-/// Trait for types convertible to `Value`.
-trait ToValue {
-    /// Performs the conversion.
-    fn to_value(self, mv8: &MiniV8) -> Result<MV8Value>;
-}
-
-/// Trait for types convertible from `Value`.
-trait FromValue: Sized {
-    /// Performs the conversion.
-    fn from_value(value: MV8Value, mv8: &MiniV8) -> Result<Self>;
-}
-
 #[derive(Clone)]
 struct MV8String {
     mv8: MiniV8,
@@ -418,24 +406,6 @@ impl fmt::Debug for MV8String {
     }
 }
 
-impl ToValue for MV8Value {
-    fn to_value(self, _mv8: &MiniV8) -> Result<MV8Value> {
-        Ok(self)
-    }
-}
-
-impl FromValue for MV8Value {
-    fn from_value(value: MV8Value, _mv8: &MiniV8) -> Result<Self> {
-        Ok(value)
-    }
-}
-
-impl FromValue for String {
-    fn from_value(value: MV8Value, mv8: &MiniV8) -> Result<Self> {
-        Ok(value.coerce_string(mv8)?.to_rust_string())
-    }
-}
-
 #[derive(Clone)]
 struct Object {
     mv8: MiniV8,
@@ -448,15 +418,12 @@ impl Object {
     ///
     /// Returns an error if `ToValue::to_value` fails for the key or if the key value could not be
     /// cast to a property key string.
-    fn get<V: FromValue>(&self, key: MV8String) -> Result<V> {
+    fn get(&self, key: MV8String) -> Result<MV8Value> {
         self.mv8.try_catch(|scope| {
             let object = v8::Local::new(scope, self.handle.clone());
             let key = MV8Value::String(key).to_v8_value(scope);
             let result = object.get(scope, key);
-            V::from_value(
-                MV8Value::from_v8_value(&self.mv8, scope, result.unwrap()),
-                &self.mv8,
-            )
+            Ok(MV8Value::from_v8_value(&self.mv8, scope, result.unwrap()))
         })
     }
 
@@ -464,9 +431,8 @@ impl Object {
     ///
     /// Returns an error if `ToValue::to_value` fails for either the key or the value or if the key
     /// value could not be cast to a property key string.
-    fn set<V: ToValue>(&self, key: String, value: V) -> Result<()> {
+    fn set(&self, key: String, value: MV8Value) -> Result<()> {
         let key = MV8Value::String(self.mv8.create_string(&key));
-        let value = value.to_value(&self.mv8)?;
         self.mv8.try_catch(|scope| {
             let object = v8::Local::new(scope, self.handle.clone());
             let key = key.to_v8_value(scope);
@@ -503,7 +469,7 @@ impl fmt::Debug for Object {
         write!(f, "{{ ")?;
         for (i, k) in keys.iter().cloned().enumerate() {
             write!(f, "{:?}: ", k)?;
-            match self.get::<MV8Value>(k) {
+            match self.get(k) {
                 Ok(v) => write!(f, "{:?}", v)?,
                 Err(_) => write!(f, "?")?,
             };
