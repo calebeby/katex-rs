@@ -108,7 +108,6 @@ impl<'a> JsValue<'a> for Value<'a> {
     }
 }
 
-#[derive(Clone)]
 struct MiniV8 {
     interface: Interface,
 }
@@ -178,7 +177,6 @@ impl MiniV8 {
     }
 }
 
-#[derive(Clone)]
 struct Interface(Rc<RefCell<InterfaceEntry>>);
 
 impl Interface {
@@ -251,7 +249,6 @@ fn initialize_v8() {
     });
 }
 
-#[derive(Clone)]
 enum MV8Value {
     Undefined,
     Null,
