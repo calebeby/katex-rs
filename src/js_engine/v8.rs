@@ -75,24 +75,21 @@ impl JsEngine for Engine {
         &'a self,
         input: impl Iterator<Item = (String, Self::JsValue<'a>)>,
     ) -> Result<Self::JsValue<'a>> {
-        let obj = self.0.scope(|scope| {
-            let object = v8::Object::new(scope);
-            Object {
-                mv8: self.0.clone(),
-                handle: v8::Global::new(scope, object),
-            }
+        let obj_handle = self.0.scope(|scope| {
+            let local = v8::Object::new(scope);
+            v8::Global::new(scope, local)
         });
         for (k, v) in input {
-            obj.mv8.try_catch(|scope| {
+            self.0.try_catch(|scope| {
                 let key = v8::String::new(scope, &k).unwrap();
-                let object = v8::Local::new(scope, obj.handle.clone());
+                let object = v8::Local::new(scope, obj_handle.clone());
                 let value = v.value.to_v8_value(scope);
                 object.set(scope, key.into(), value);
                 Ok(())
             })?;
         }
         Ok(Value {
-            value: MV8Value::Object(obj),
+            value: MV8Value::Object(obj_handle),
             engine: &self.0,
         })
     }
@@ -147,7 +144,7 @@ impl MiniV8 {
                 .ok_or(Error::JsExecError(
                     "Function call did not return a result".to_string(),
                 ))?;
-            Ok(MV8Value::from_v8_value(self, scope, result))
+            Ok(MV8Value::from_v8_value(scope, result))
         })
     }
 
@@ -157,7 +154,7 @@ impl MiniV8 {
             let source = v8::String::new(scope, script).unwrap();
             let script = v8::Script::compile(scope, source, None);
             let result = script.unwrap().run(scope);
-            Ok(MV8Value::from_v8_value(self, scope, result.unwrap()))
+            Ok(MV8Value::from_v8_value(scope, result.unwrap()))
         })
     }
 
@@ -287,15 +284,11 @@ enum MV8Value {
     /// An immutable JavaScript string, managed by V8.
     String(v8::Global<v8::String>),
     /// Reference to a JavaScript object.
-    Object(Object),
+    Object(v8::Global<v8::Object>),
 }
 
 impl MV8Value {
-    fn from_v8_value(
-        mv8: &MiniV8,
-        scope: &mut v8::HandleScope,
-        value: v8::Local<v8::Value>,
-    ) -> MV8Value {
+    fn from_v8_value(scope: &mut v8::HandleScope, value: v8::Local<v8::Value>) -> MV8Value {
         if value.is_undefined() {
             MV8Value::Undefined
         } else if value.is_null() {
@@ -313,10 +306,7 @@ impl MV8Value {
         } else if value.is_object() {
             let value: v8::Local<v8::Object> = value.try_into().unwrap();
             let handle = v8::Global::new(scope, value);
-            MV8Value::Object(Object {
-                mv8: mv8.clone(),
-                handle,
-            })
+            MV8Value::Object(handle)
         } else {
             MV8Value::Undefined
         }
@@ -328,14 +318,8 @@ impl MV8Value {
             MV8Value::Null => v8::null(scope).into(),
             MV8Value::Boolean(v) => v8::Boolean::new(scope, *v).into(),
             MV8Value::Number(v) => v8::Number::new(scope, *v).into(),
-            MV8Value::Object(v) => v8::Local::new(scope, v.handle.clone()).into(),
+            MV8Value::Object(v) => v8::Local::new(scope, v.clone()).into(),
             MV8Value::String(v) => v8::Local::new(scope, v.clone()).into(),
         }
     }
-}
-
-#[derive(Clone)]
-struct Object {
-    mv8: MiniV8,
-    handle: v8::Global<v8::Object>,
 }
