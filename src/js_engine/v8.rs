@@ -6,7 +6,6 @@ use crate::Result;
 use crate::Error;
 use std::cell::RefCell;
 use std::fmt;
-use std::iter::FromIterator;
 use std::rc::Rc;
 use std::sync::Once;
 use std::vec;
@@ -34,7 +33,7 @@ impl JsEngine for Engine {
         func_name: &str,
         args: impl Iterator<Item = Self::JsValue<'a>>,
     ) -> Result<Self::JsValue<'a>> {
-        let args: Values = args.map(|v| v.value).collect();
+        let args: Vec<MV8Value> = args.map(|v| v.value).collect();
         let result = self.0.call_global_function(func_name.to_owned(), args)?;
         Ok(Value {
             value: result,
@@ -118,16 +117,12 @@ impl MiniV8 {
         }
     }
 
-    fn call_global_function<A>(&self, func_name: String, args: A) -> Result<MV8Value>
-    where
-        A: ToValues,
-    {
+    fn call_global_function(&self, func_name: String, args: Vec<MV8Value>) -> Result<MV8Value> {
         let global = self.scope(|scope| {
             let global = scope.get_current_context().global(scope);
             v8::Global::new(scope, global)
         });
         let key = Ok(MV8Value::String(self.create_string(&func_name)))?;
-        let args = args.to_values(self)?;
         self.try_catch(|scope| {
             let object = v8::Local::new(scope, global);
             let key = key.to_v8_value(scope);
@@ -135,8 +130,8 @@ impl MiniV8 {
             let function: v8::Local<'_, v8::Function> = result.try_into().unwrap();
             let this = MV8Value::Undefined;
             let this = this.to_v8_value(scope);
-            let args = args.into_vec();
-            let args_v8: Vec<_> = args.into_iter().map(|v| v.to_v8_value(scope)).collect();
+            let args_v8: Vec<v8::Local<'_, v8::Value>> =
+                args.into_iter().map(|v| v.to_v8_value(scope)).collect();
             let result = function
                 .call(scope, this, &args_v8)
                 .ok_or(Error::JsExecError(
@@ -403,49 +398,6 @@ trait FromValue: Sized {
     fn from_value(value: MV8Value, mv8: &MiniV8) -> Result<Self>;
 }
 
-/// A collection of multiple JavaScript values used for interacting with function arguments.
-#[derive(Clone)]
-struct Values(Vec<MV8Value>);
-
-impl Values {
-    fn from_vec(vec: Vec<MV8Value>) -> Values {
-        Values(vec)
-    }
-
-    fn into_vec(self) -> Vec<MV8Value> {
-        self.0
-    }
-}
-
-impl FromIterator<MV8Value> for Values {
-    fn from_iter<I: IntoIterator<Item = MV8Value>>(iter: I) -> Self {
-        Values::from_vec(Vec::from_iter(iter))
-    }
-}
-
-/// Trait for types convertible to any number of JavaScript values.
-///
-/// This is a generalization of `ToValue`, allowing any number of resulting JavaScript values
-/// instead of just one. Any type that implements `ToValue` will automatically implement this trait.
-trait ToValues {
-    /// Performs the conversion.
-    fn to_values(self, mv8: &MiniV8) -> Result<Values>;
-}
-
-/// Trait for types that can be created from an arbitrary number of JavaScript values.
-///
-/// This is a generalization of `FromValue`, allowing an arbitrary number of JavaScript values to
-/// participate in the conversion. Any type that implements `FromValue` will automatically implement
-/// this trait.
-trait FromValues: Sized {
-    /// Performs the conversion.
-    ///
-    /// In case `values` contains more values than needed to perform the conversion, the excess
-    /// values should be ignored. Similarly, if not enough values are given, conversions should
-    /// assume that any missing values are undefined.
-    fn from_values(values: Values, mv8: &MiniV8) -> Result<Self>;
-}
-
 #[derive(Clone)]
 struct MV8String {
     mv8: MiniV8,
@@ -481,12 +433,6 @@ impl FromValue for MV8Value {
 impl FromValue for String {
     fn from_value(value: MV8Value, mv8: &MiniV8) -> Result<Self> {
         Ok(value.coerce_string(mv8)?.to_rust_string())
-    }
-}
-
-impl ToValues for Values {
-    fn to_values(self, _mv8: &MiniV8) -> Result<Values> {
-        Ok(self)
     }
 }
 
