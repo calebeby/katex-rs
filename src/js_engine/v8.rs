@@ -9,20 +9,20 @@ use std::rc::Rc;
 use std::sync::Once;
 
 /// v8 Engine.
-pub struct Engine(MiniV8);
+pub struct Engine(Rc<RefCell<MiniV8>>);
 
 impl JsEngine for Engine {
-    type JsValue<'a> = Value<'a>;
+    type JsValue<'a> = Value;
 
     fn new() -> Result<Self> {
-        Ok(Self(MiniV8::new()))
+        Ok(Self(Rc::new(RefCell::new(MiniV8::new()))))
     }
 
     fn eval<'a>(&'a self, code: &str) -> Result<Self::JsValue<'a>> {
-        let result = self.0.eval(code)?;
+        let result = self.0.borrow_mut().eval(code)?;
         Ok(Value {
             value: result,
-            engine: &self.0,
+            engine: Rc::clone(&self.0),
         })
     }
 
@@ -32,50 +32,53 @@ impl JsEngine for Engine {
         args: impl Iterator<Item = Self::JsValue<'a>>,
     ) -> Result<Self::JsValue<'a>> {
         let args = args.map(|v| v.value).collect();
-        let result = self.0.call_global_function(func_name.to_owned(), args)?;
+        let result = self
+            .0
+            .borrow_mut()
+            .call_global_function(func_name.to_owned(), args)?;
         Ok(Value {
             value: result,
-            engine: &self.0,
+            engine: Rc::clone(&self.0),
         })
     }
 
     fn create_bool_value(&self, input: bool) -> Result<Self::JsValue<'_>> {
+        let engine: &mut MiniV8 = &mut self.0.borrow_mut();
+        let scope = &mut engine.scope();
+        let local = v8::Local::from(v8::Boolean::new(scope, input));
         Ok(Value {
-            value: self.0.scope(|scope| {
-                let local = v8::Local::from(v8::Boolean::new(scope, input));
-                v8::Global::new(scope, local)
-            }),
-            engine: &self.0,
+            value: v8::Global::new(scope, local),
+            engine: Rc::clone(&self.0),
         })
     }
 
     fn create_int_value(&self, input: i32) -> Result<Self::JsValue<'_>> {
+        let engine: &mut MiniV8 = &mut self.0.borrow_mut();
+        let scope = &mut engine.scope();
+        let local = v8::Local::from(v8::Integer::new(scope, input));
         Ok(Value {
-            value: self.0.scope(|scope| {
-                let local = v8::Local::from(v8::Integer::new(scope, input));
-                v8::Global::new(scope, local)
-            }),
-            engine: &self.0,
+            value: v8::Global::new(scope, local),
+            engine: Rc::clone(&self.0),
         })
     }
 
     fn create_float_value(&self, input: f64) -> Result<Self::JsValue<'_>> {
+        let engine: &mut MiniV8 = &mut self.0.borrow_mut();
+        let scope = &mut engine.scope();
+        let local = v8::Local::from(v8::Number::new(scope, input));
         Ok(Value {
-            value: self.0.scope(|scope| {
-                let local = v8::Local::from(v8::Number::new(scope, input));
-                v8::Global::new(scope, local)
-            }),
-            engine: &self.0,
+            value: v8::Global::new(scope, local),
+            engine: Rc::clone(&self.0),
         })
     }
 
     fn create_string_value(&self, input: String) -> Result<Self::JsValue<'_>> {
+        let engine: &mut MiniV8 = &mut self.0.borrow_mut();
+        let scope = &mut engine.scope();
+        let local = v8::Local::from(v8::String::new(scope, &input).unwrap());
         Ok(Value {
-            value: self.0.scope(|scope| {
-                let local = v8::Local::from(v8::String::new(scope, &input).unwrap());
-                v8::Global::new(scope, local)
-            }),
-            engine: &self.0,
+            value: v8::Global::new(scope, local),
+            engine: Rc::clone(&self.0),
         })
     }
 
@@ -84,31 +87,31 @@ impl JsEngine for Engine {
         input: impl Iterator<Item = (String, Self::JsValue<'a>)>,
     ) -> Result<Self::JsValue<'a>> {
         let input = input.collect::<Vec<_>>();
-        let obj_handle = self.0.scope(|scope| {
-            let object = v8::Object::new(scope);
-            for (k, v) in input {
-                let key = v8::String::new(scope, &k).unwrap();
-                let value = v8::Local::new(scope, v.value);
-                object.set(scope, key.into(), value);
-            }
-            v8::Global::new(scope, v8::Local::from(object))
-        });
+        let engine: &mut MiniV8 = &mut self.0.borrow_mut();
+        let scope = &mut engine.scope();
+        let object = v8::Object::new(scope);
+        for (k, v) in input {
+            let key = v8::String::new(scope, &k).unwrap();
+            let value = v8::Local::new(scope, v.value);
+            object.set(scope, key.into(), value);
+        }
+        let obj_handle = v8::Global::new(scope, v8::Local::from(object));
 
         Ok(Value {
             value: obj_handle,
-            engine: &self.0,
+            engine: Rc::clone(&self.0),
         })
     }
 }
 
-pub struct Value<'a> {
+pub struct Value {
     value: v8::Global<v8::Value>,
-    engine: &'a MiniV8,
+    engine: Rc<RefCell<MiniV8>>,
 }
 
-impl<'a> JsValue<'a> for Value<'a> {
+impl JsValue<'_> for Value {
     fn into_string(self) -> Result<String> {
-        self.engine.try_catch(|scope| {
+        self.engine.borrow_mut().try_catch(|scope| {
             let maybe = v8::Local::new(scope, self.value).to_string(scope).unwrap();
             Ok(maybe.to_rust_string_lossy(scope))
         })
@@ -116,7 +119,7 @@ impl<'a> JsValue<'a> for Value<'a> {
 }
 
 struct MiniV8 {
-    interface_entry: Rc<RefCell<InterfaceEntry>>,
+    isolate: v8::OwnedIsolate,
 }
 
 impl MiniV8 {
@@ -132,21 +135,19 @@ impl MiniV8 {
                 context: global_context,
             });
         }
-        MiniV8 {
-            interface_entry: Rc::new(RefCell::new(InterfaceEntry(isolate))),
-        }
+        MiniV8 { isolate }
     }
 
     fn call_global_function(
-        &self,
+        &mut self,
         func_name: String,
         args: Vec<v8::Global<v8::Value>>,
     ) -> Result<v8::Global<v8::Value>> {
-        let global = self.scope(|scope| {
-            let global = scope.get_current_context().global(scope);
-            v8::Global::new(scope, global)
-        });
         self.try_catch(|scope| {
+            let global = {
+                let global = scope.get_current_context().global(scope);
+                v8::Global::new(scope, global)
+            };
             let object = v8::Local::new(scope, global);
             let key = v8::String::new(scope, &func_name).unwrap();
             let result: v8::Local<'_, v8::Value> = object.get(scope, key.into()).unwrap();
@@ -163,7 +164,7 @@ impl MiniV8 {
         })
     }
 
-    fn eval(&self, script: &str) -> Result<v8::Global<v8::Value>> {
+    fn eval(&mut self, script: &str) -> Result<v8::Global<v8::Value>> {
         self.try_catch(|scope| {
             let source = v8::String::new(scope, script).unwrap();
             let script = v8::Script::compile(scope, source, None);
@@ -172,40 +173,22 @@ impl MiniV8 {
         })
     }
 
-    fn scope<F, T>(&self, func: F) -> T
-    where
-        F: FnOnce(&mut v8::ContextScope<v8::HandleScope>) -> T,
-    {
-        self.interface_entry.borrow_mut().scope(func)
+    fn scope(&mut self) -> v8::HandleScope {
+        let context = self.isolate.get_slot::<Global>().unwrap().context.clone();
+        v8::HandleScope::with_context(&mut self.isolate, context)
     }
 
-    fn try_catch<F, T>(&self, func: F) -> Result<T>
+    fn try_catch<F, T>(&mut self, func: F) -> Result<T>
     where
         F: FnOnce(&mut v8::TryCatch<v8::HandleScope>) -> Result<T>,
     {
-        self.scope(|scope| {
-            let mut try_catch = v8::TryCatch::new(scope);
-            let result = func(&mut try_catch);
-            match try_catch.exception() {
-                Some(val) => Err(Error::JsExecError(val.to_rust_string_lossy(&mut try_catch))),
-                None => Ok(result?),
-            }
-        })
-    }
-}
-
-struct InterfaceEntry(v8::OwnedIsolate);
-
-impl InterfaceEntry {
-    fn scope<F, T>(&mut self, func: F) -> T
-    where
-        F: FnOnce(&mut v8::ContextScope<v8::HandleScope>) -> T,
-    {
-        let global_context = self.0.get_slot::<Global>().unwrap().context.clone();
-        let scope = &mut v8::HandleScope::new(&mut self.0);
-        let context = v8::Local::new(scope, global_context);
-        let scope = &mut v8::ContextScope::new(scope, context);
-        func(scope)
+        let scope = &mut self.scope();
+        let mut try_catch = v8::TryCatch::new(scope);
+        let result = func(&mut try_catch);
+        match try_catch.exception() {
+            Some(val) => Err(Error::JsExecError(val.to_rust_string_lossy(&mut try_catch))),
+            None => Ok(result?),
+        }
     }
 }
 
