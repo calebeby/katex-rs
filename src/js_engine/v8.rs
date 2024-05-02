@@ -150,8 +150,8 @@ impl MiniV8 {
             };
             let object = v8::Local::new(scope, global);
             let key = v8::String::new(scope, &func_name).unwrap();
-            let result: v8::Local<'_, v8::Value> = object.get(scope, key.into()).unwrap();
-            let function: v8::Local<'_, v8::Function> = result.try_into().unwrap();
+            let result = object.get(scope, key.into()).unwrap();
+            let function = v8::Local::<v8::Function>::try_from(result).unwrap();
             let this = v8::undefined(scope).into();
             let args: Vec<_> = args
                 .into_iter()
