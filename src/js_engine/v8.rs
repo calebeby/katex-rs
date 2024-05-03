@@ -25,7 +25,12 @@ impl JsEngine for Engine {
     }
 
     fn eval<'a>(&'a self, code: &str) -> Result<Self::JsValue<'a>> {
-        let result = self.0.borrow_mut().eval(code)?;
+        let result = self.0.borrow_mut().try_catch(|scope| {
+            let source = v8::String::new(scope, code).unwrap();
+            let script = v8::Script::compile(scope, source, None);
+            let result = script.unwrap().run(scope).unwrap();
+            Ok(v8::Global::new(scope, result))
+        })?;
         Ok(Value {
             value: result,
             engine: Rc::clone(&self.0),
@@ -37,11 +42,18 @@ impl JsEngine for Engine {
         func_name: &str,
         args: impl Iterator<Item = Self::JsValue<'a>>,
     ) -> Result<Self::JsValue<'a>> {
-        let args = args.map(|v| v.value).collect();
-        let result = self
-            .0
-            .borrow_mut()
-            .call_global_function(func_name.to_owned(), args)?;
+        let result = self.0.borrow_mut().try_catch(|scope| {
+            let global_object = scope.get_current_context().global(scope);
+            let key = v8::String::new(scope, func_name).unwrap();
+            let result = global_object.get(scope, key.into()).unwrap();
+            let function = v8::Local::<v8::Function>::try_from(result).unwrap();
+            let this = v8::Local::<v8::Value>::from(v8::undefined(scope));
+            let args: Vec<_> = args.map(|arg| v8::Local::new(scope, arg.value)).collect();
+            let result = function.call(scope, this, &args).ok_or(Error::JsExecError(
+                "Function call did not return a result".to_string(),
+            ))?;
+            Ok(v8::Global::new(scope, result))
+        })?;
         Ok(Value {
             value: result,
             engine: Rc::clone(&self.0),
@@ -146,37 +158,6 @@ impl V8Wrapper {
             });
         }
         V8Wrapper { isolate }
-    }
-
-    fn call_global_function(
-        &mut self,
-        func_name: String,
-        args: Vec<v8::Global<v8::Value>>,
-    ) -> Result<v8::Global<v8::Value>> {
-        self.try_catch(|scope| {
-            let global_object = scope.get_current_context().global(scope);
-            let key = v8::String::new(scope, &func_name).unwrap();
-            let result = global_object.get(scope, key.into()).unwrap();
-            let function = v8::Local::<v8::Function>::try_from(result).unwrap();
-            let this = v8::Local::<v8::Value>::from(v8::undefined(scope));
-            let args: Vec<_> = args
-                .into_iter()
-                .map(|arg| v8::Local::new(scope, arg))
-                .collect();
-            let result = function.call(scope, this, &args).ok_or(Error::JsExecError(
-                "Function call did not return a result".to_string(),
-            ))?;
-            Ok(v8::Global::new(scope, result))
-        })
-    }
-
-    fn eval(&mut self, script: &str) -> Result<v8::Global<v8::Value>> {
-        self.try_catch(|scope| {
-            let source = v8::String::new(scope, script).unwrap();
-            let script = v8::Script::compile(scope, source, None);
-            let result = script.unwrap().run(scope).unwrap();
-            Ok(v8::Global::new(scope, result))
-        })
     }
 
     fn scope(&mut self) -> v8::HandleScope {
