@@ -11,6 +11,12 @@ use std::sync::Once;
 /// v8 Engine.
 pub struct Engine(Rc<RefCell<MiniV8>>);
 
+struct Global {
+    context: v8::Global<v8::Context>,
+}
+
+static INIT: Once = Once::new();
+
 impl JsEngine for Engine {
     type JsValue<'a> = Value;
 
@@ -124,7 +130,11 @@ struct MiniV8 {
 
 impl MiniV8 {
     fn new() -> MiniV8 {
-        initialize_v8();
+        INIT.call_once(|| {
+            let platform = v8::new_unprotected_default_platform(0, false).make_shared();
+            v8::V8::initialize_platform(platform);
+            v8::V8::initialize();
+        });
         let mut isolate = v8::Isolate::new(Default::default());
         {
             let scope = &mut v8::HandleScope::new(&mut isolate);
@@ -144,15 +154,11 @@ impl MiniV8 {
         args: Vec<v8::Global<v8::Value>>,
     ) -> Result<v8::Global<v8::Value>> {
         self.try_catch(|scope| {
-            let global = {
-                let global = scope.get_current_context().global(scope);
-                v8::Global::new(scope, global)
-            };
-            let object = v8::Local::new(scope, global);
+            let global_object = scope.get_current_context().global(scope);
             let key = v8::String::new(scope, &func_name).unwrap();
-            let result = object.get(scope, key.into()).unwrap();
+            let result = global_object.get(scope, key.into()).unwrap();
             let function = v8::Local::<v8::Function>::try_from(result).unwrap();
-            let this = v8::undefined(scope).into();
+            let this = v8::Local::<v8::Value>::from(v8::undefined(scope));
             let args: Vec<_> = args
                 .into_iter()
                 .map(|arg| v8::Local::new(scope, arg))
@@ -190,18 +196,4 @@ impl MiniV8 {
             None => Ok(result?),
         }
     }
-}
-
-struct Global {
-    context: v8::Global<v8::Context>,
-}
-
-static INIT: Once = Once::new();
-
-fn initialize_v8() {
-    INIT.call_once(|| {
-        let platform = v8::new_unprotected_default_platform(0, false).make_shared();
-        v8::V8::initialize_platform(platform);
-        v8::V8::initialize();
-    });
 }
