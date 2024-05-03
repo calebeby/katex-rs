@@ -9,7 +9,7 @@ use std::rc::Rc;
 use std::sync::Once;
 
 /// v8 Engine.
-pub struct Engine(Rc<RefCell<MiniV8>>);
+pub struct Engine(Rc<RefCell<V8Wrapper>>);
 
 struct Global {
     context: v8::Global<v8::Context>,
@@ -21,7 +21,7 @@ impl JsEngine for Engine {
     type JsValue<'a> = Value;
 
     fn new() -> Result<Self> {
-        Ok(Self(Rc::new(RefCell::new(MiniV8::new()))))
+        Ok(Self(Rc::new(RefCell::new(V8Wrapper::new()))))
     }
 
     fn eval<'a>(&'a self, code: &str) -> Result<Self::JsValue<'a>> {
@@ -49,7 +49,7 @@ impl JsEngine for Engine {
     }
 
     fn create_bool_value(&self, input: bool) -> Result<Self::JsValue<'_>> {
-        let engine: &mut MiniV8 = &mut self.0.borrow_mut();
+        let engine: &mut V8Wrapper = &mut self.0.borrow_mut();
         let scope = &mut engine.scope();
         let local = v8::Local::from(v8::Boolean::new(scope, input));
         Ok(Value {
@@ -59,7 +59,7 @@ impl JsEngine for Engine {
     }
 
     fn create_int_value(&self, input: i32) -> Result<Self::JsValue<'_>> {
-        let engine: &mut MiniV8 = &mut self.0.borrow_mut();
+        let engine: &mut V8Wrapper = &mut self.0.borrow_mut();
         let scope = &mut engine.scope();
         let local = v8::Local::from(v8::Integer::new(scope, input));
         Ok(Value {
@@ -69,7 +69,7 @@ impl JsEngine for Engine {
     }
 
     fn create_float_value(&self, input: f64) -> Result<Self::JsValue<'_>> {
-        let engine: &mut MiniV8 = &mut self.0.borrow_mut();
+        let engine: &mut V8Wrapper = &mut self.0.borrow_mut();
         let scope = &mut engine.scope();
         let local = v8::Local::from(v8::Number::new(scope, input));
         Ok(Value {
@@ -79,7 +79,7 @@ impl JsEngine for Engine {
     }
 
     fn create_string_value(&self, input: String) -> Result<Self::JsValue<'_>> {
-        let engine: &mut MiniV8 = &mut self.0.borrow_mut();
+        let engine: &mut V8Wrapper = &mut self.0.borrow_mut();
         let scope = &mut engine.scope();
         let local = v8::Local::from(v8::String::new(scope, &input).unwrap());
         Ok(Value {
@@ -93,7 +93,7 @@ impl JsEngine for Engine {
         input: impl Iterator<Item = (String, Self::JsValue<'a>)>,
     ) -> Result<Self::JsValue<'a>> {
         let input = input.collect::<Vec<_>>();
-        let engine: &mut MiniV8 = &mut self.0.borrow_mut();
+        let engine: &mut V8Wrapper = &mut self.0.borrow_mut();
         let scope = &mut engine.scope();
         let object = v8::Object::new(scope);
         for (k, v) in input {
@@ -112,7 +112,7 @@ impl JsEngine for Engine {
 
 pub struct Value {
     value: v8::Global<v8::Value>,
-    engine: Rc<RefCell<MiniV8>>,
+    engine: Rc<RefCell<V8Wrapper>>,
 }
 
 impl JsValue<'_> for Value {
@@ -124,12 +124,12 @@ impl JsValue<'_> for Value {
     }
 }
 
-struct MiniV8 {
+struct V8Wrapper {
     isolate: v8::OwnedIsolate,
 }
 
-impl MiniV8 {
-    fn new() -> MiniV8 {
+impl V8Wrapper {
+    fn new() -> V8Wrapper {
         INIT.call_once(|| {
             let platform = v8::new_unprotected_default_platform(0, false).make_shared();
             v8::V8::initialize_platform(platform);
@@ -145,7 +145,7 @@ impl MiniV8 {
                 context: global_context,
             });
         }
-        MiniV8 { isolate }
+        V8Wrapper { isolate }
     }
 
     fn call_global_function(
